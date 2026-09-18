@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+sandbox_runs/
+*.log
+
+# Frontend
+node_modules/
+.next/
+out/
+build/
+.env*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# System
+.DS_Store
+Thumbs.db
+
+# Scratch scripts
+backend/fix*
+backend/rewrite*
+backend/setup*
+backend/test_clean*
+frontend/page_backup*
+frontend/script*
+factorial.py
+main.py
