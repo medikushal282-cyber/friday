@@ -2,6 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from app.api.runs import router as runs_router
 from app.api.workspace import router as workspace_router
