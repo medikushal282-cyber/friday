@@ -21,4 +21,8 @@ class FraidayState(TypedDict):
     error: Optional[Any]
 
     retry_count: int
+
+    # Human-in-the-loop approval state
     approval_required: bool
+    approval_status: str
+    approval_request: Optional[Dict[str, Any]]

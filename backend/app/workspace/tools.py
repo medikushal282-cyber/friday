@@ -112,16 +112,47 @@ def tool_update_file(path: str, content: str) -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "tool": "update_file", "path": path, "error": str(e)}
 
-def tool_delete_file(path: str) -> Dict[str, Any]:
-    # Destructive file deletions in this phase require explicit approval per security policy
-    return {
-        "success": False,
-        "tool": "delete_file",
-        "path": path,
-        "status": "approval_required",
-        "reason": "Destructive file deletion requires explicit user approval.",
-        "policy": POLICY_APPROVAL_REQUIRED
-    }
+def tool_delete_file(path: str, approved: bool = False) -> Dict[str, Any]:
+    # Destructive file deletion requires explicit human approval.
+    if not approved:
+        return {
+            "success": False,
+            "tool": "delete_file",
+            "path": path,
+            "status": "approval_required",
+            "reason": "Destructive file deletion requires explicit user approval.",
+            "policy": POLICY_APPROVAL_REQUIRED
+        }
+
+    ws = get_workspace_manager()
+
+    try:
+        result = ws.delete_file(path)
+
+        if result.get("success"):
+            return {
+                "success": True,
+                "tool": "delete_file",
+                "path": path,
+                "status": "deleted"
+            }
+
+        return {
+            "success": False,
+            "tool": "delete_file",
+            "path": path,
+            "status": "failed",
+            "error": result.get("error", "File deletion failed.")
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "tool": "delete_file",
+            "path": path,
+            "status": "failed",
+            "error": str(e)
+        }
 
 def tool_run_command(command: str, timeout: int = 30) -> Dict[str, Any]:
     ws = get_workspace_manager()

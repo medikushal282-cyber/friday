@@ -82,17 +82,42 @@ async def executor_node(state: dict) -> dict:
             step["status"] = "running"
             await emit(run_id, "step_started", "executor", {"step_id": step["id"]})
 
-        await emit(run_id, "tool_call_started", "executor", {"tool": "delete_file", "path": target_file})
-        del_res = await asyncio.to_thread(execute_tool, "delete_file", path=target_file)
-        await emit(run_id, "tool_call_completed", "executor", del_res)
-        await emit(run_id, "file_deleted", "executor", {
-            "path": target_file,
-            "status": del_res.get("status"),
-            "reason": del_res.get("reason", "Deleted")
-        })
+        await emit(
+            run_id,
+            "tool_call_started",
+            "executor",
+            {
+                "tool": "delete_file",
+                "path": target_file
+            }
+        )
+
+        del_res = await asyncio.to_thread(
+            execute_tool,
+            "delete_file",
+            path=target_file
+        )
+
+        await emit(
+            run_id,
+            "tool_call_completed",
+            "executor",
+            del_res
+        )
 
         if del_res.get("status") == "approval_required":
+            # Pause execution and request explicit human approval.
             state["approval_required"] = True
+            state["approval_status"] = "pending"
+            state["approval_request"] = {
+                "tool": "delete_file",
+                "path": target_file,
+                "reason": del_res.get(
+                    "reason",
+                    "Destructive file deletion requires explicit user approval."
+                )
+            }
+
             obs = {
                 "tool": "delete_file",
                 "path": target_file,
@@ -100,6 +125,15 @@ async def executor_node(state: dict) -> dict:
                 "message": del_res.get("reason"),
                 "exit_code": 0
             }
+
+            # Do NOT claim the file was deleted.
+            await emit(
+                run_id,
+                "approval_requested",
+                "executor",
+                state["approval_request"]
+            )
+
         else:
             obs = {
                 "tool": "delete_file",
@@ -108,10 +142,25 @@ async def executor_node(state: dict) -> dict:
                 "exit_code": 0 if del_res.get("success") else 1
             }
 
+            if del_res.get("success"):
+                await emit(
+                    run_id,
+                    "file_deleted",
+                    "executor",
+                    {
+                        "path": target_file,
+                        "status": "deleted"
+                    }
+                )
+
         state.setdefault("observations", []).append(obs)
         if step:
             step["status"] = "completed"
             await emit(run_id, "step_completed", "executor", {"step_id": step["id"], "status": "completed"})
+
+        if state.get("approval_status") == "pending":
+            state["status"] = "paused"
+            return state
 
         state["current_step"] = "validator"
         return state
