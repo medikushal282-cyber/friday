@@ -76,9 +76,22 @@ def check_command_policy(command: Union[str, List[str]]) -> Tuple[str, str]:
     for safe_prefix in SAFE_COMMAND_PREFIXES:
         if cmd_lower == safe_prefix or cmd_lower.startswith(safe_prefix + " "):
             return POLICY_SAFE, "Command is classified as safe"
+    
+    # Handle quoted absolute paths like '"C:\Program Files\Python313\python.exe" "script.py"'
+    # shlex handles the quoted executable with spaces correctly
+    try:
+        tokens = shlex.split(cmd_str, posix=True)
+        if tokens:
+            first_token_lower = tokens[0].lower()
+            if "python" in first_token_lower or first_token_lower == "py":
+                return POLICY_SAFE, "Command is classified as safe (quoted python executable)"
+    except Exception:
+        pass
             
     # Also check if it is executing a python file or node script in workspace
-    if cmd_lower.endswith(".py") or cmd_lower.endswith(".js") or cmd_lower.endswith(".ts"):
+    # Handle quoted paths like '"C:\Program Files\python.exe" "script.py"' (trailing quote breaks endswith)
+    stripped_for_ext = cmd_lower.strip().rstrip('"').rstrip("'").strip()
+    if stripped_for_ext.endswith(".py") or stripped_for_ext.endswith(".js") or stripped_for_ext.endswith(".ts"):
         return POLICY_SAFE, "Executing script"
 
     # Default to APPROVAL_REQUIRED for unknown/unclassified commands

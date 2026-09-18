@@ -202,7 +202,7 @@ Rules:
             step_exec["status"] = "running"
             await emit(run_id, "step_started", "executor", {"step_id": step_exec["id"]})
 
-        cmd = f"{python_exe} {target_file}"
+        cmd = f'"{python_exe}" "{target_file}"'
         await emit(run_id, "command_started", "executor", {"command": cmd})
         cmd_res = await asyncio.to_thread(execute_tool, "run_command", command=cmd, timeout=20)
         await emit(run_id, "command_completed", "executor", cmd_res)
@@ -276,7 +276,7 @@ Rules:
         step_exec["status"] = "running"
         await emit(run_id, "step_started", "executor", {"step_id": step_exec["id"]})
 
-    cmd = f"{python_exe} {target_file}"
+    cmd = f'"{python_exe}" "{target_file}"'
     await emit(run_id, "command_started", "executor", {"command": cmd})
     cmd_res = await asyncio.to_thread(execute_tool, "run_command", command=cmd, timeout=20)
     await emit(run_id, "command_completed", "executor", cmd_res)
