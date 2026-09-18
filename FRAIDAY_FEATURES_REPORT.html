@@ -1,0 +1,288 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FRAIDAY — Feature & Architecture Report</title>
+  <style>
+    :root {
+      --bg: #fdfdfd;
+      --fg: #111111;
+      --border: #222222;
+      --accent: #2563eb;
+      --accent-light: #eff6ff;
+      --badge-bg: #f3f4f6;
+      --code-bg: #f8fafc;
+    }
+    @media print {
+      .no-print { display: none !important; }
+      body { padding: 0; }
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.6;
+      color: var(--fg);
+      background: var(--bg);
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 40px 24px;
+    }
+    header {
+      border-bottom: 3px solid var(--border);
+      padding-bottom: 24px;
+      margin-bottom: 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      margin: 0 0 8px 0;
+      text-transform: uppercase;
+    }
+    .meta {
+      font-size: 0.95rem;
+      color: #555;
+      font-family: monospace;
+    }
+    .print-btn {
+      background: #000;
+      color: #fff;
+      border: 2px solid #000;
+      padding: 10px 18px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      box-shadow: 3px 3px 0px rgba(0,0,0,0.8);
+      transition: all 0.15s ease;
+    }
+    .print-btn:hover {
+      transform: translate(-1px, -1px);
+      box-shadow: 4px 4px 0px rgba(0,0,0,0.8);
+    }
+    h2 {
+      font-size: 1.4rem;
+      font-weight: 800;
+      border-left: 5px solid var(--border);
+      padding-left: 12px;
+      margin-top: 36px;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+    }
+    h3 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-top: 24px;
+      margin-bottom: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      font-size: 0.95rem;
+    }
+    th, td {
+      border: 2px solid var(--border);
+      padding: 10px 14px;
+      text-align: left;
+    }
+    th {
+      background: #f0f0f0;
+      font-weight: 700;
+    }
+    pre, code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9rem;
+    }
+    code {
+      background: #eeeeee;
+      padding: 2px 6px;
+      border: 1px solid #ddd;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 2px solid var(--border);
+      padding: 16px;
+      overflow-x: auto;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      font-size: 0.8rem;
+      font-weight: 800;
+      background: #e2e8f0;
+      border: 1px solid #333;
+      text-transform: uppercase;
+    }
+    .badge-success {
+      background: #dcfce7;
+      color: #166534;
+      border-color: #166534;
+    }
+    .card {
+      border: 2px solid var(--border);
+      padding: 18px;
+      margin-bottom: 20px;
+      background: #fafafa;
+      box-shadow: 3px 3px 0px rgba(0,0,0,0.1);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>FRAIDAY</h1>
+      <div class="meta">
+        <strong>Autonomous Execution & Contextual AI-Native Workspace</strong><br>
+        Repository: <a href="https://github.com/medikushal282-cyber/friday" target="_blank">medikushal282-cyber/friday</a> | Status: <span class="badge badge-success">Production Verified</span><br>
+        Report Generated: September 18, 2026
+      </div>
+    </div>
+    <div class="no-print">
+      <button class="print-btn" onclick="window.print()">Print / Export PDF</button>
+    </div>
+  </header>
+
+  <div class="card">
+    <h3 style="margin-top:0;">Executive Summary</h3>
+    <p>
+      <strong>Fraiday</strong> is an action-oriented AI engineering agent operating directly inside an authorized Windows project workspace. 
+      It integrates multi-step reasoning, real-world file CRUD operations, live command execution, physical disk state validation, 
+      real-time Server-Sent Events (SSE) streaming, and an interactive Neo-Brutalist dashboard.
+    </p>
+  </div>
+
+  <h2>1. Multi-Agent Graph Engine (LangGraph Core)</h2>
+  <p>The core execution engine (<code>backend/app/graph</code>) runs an autonomous state-machine workflow:</p>
+  <ul>
+    <li><strong>FraidayState:</strong> Persistent state model tracking run IDs, objectives, task breakdown, execution history, workspace metadata, tool invocations, artifacts, and validation verdicts.</li>
+    <li><strong>Orchestrator Node:</strong> Evaluates the workspace context, file hierarchy, and user intent to generate an action-oriented step-by-step execution plan.</li>
+    <li><strong>Researcher Node:</strong> Performs zero-hallucination contextual inspection of existing files, APIs, and directory structures prior to code generation.</li>
+    <li><strong>Dynamic Action Executor:</strong> Dynamic multi-turn tool execution loop. Interacts directly with the controlled workspace tools until the objective is reached.</li>
+    <li><strong>Real-World Validator:</strong> Validates physical file existence on disk, verifies return codes (code 0), and checks destructive operation authorization.</li>
+    <li><strong>Recovery Node:</strong> Autonomous error reflection and targeted patching when execution errors or failed validations occur.</li>
+  </ul>
+
+  <h2>2. Controlled Workspace Engine (WorkspaceManager)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Tool Name</th>
+        <th>Description</th>
+        <th>Security & Policy Controls</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>list_directory</code></td>
+        <td>Recursively inspects directory trees and file metadata.</td>
+        <td>Strictly bound within workspace; ignores <code>node_modules</code>, <code>.git</code>.</td>
+      </tr>
+      <tr>
+        <td><code>read_file</code></td>
+        <td>Reads file contents with line counts and sizes.</td>
+        <td>UTF-8 decoded; rejects paths escaping root workspace.</td>
+      </tr>
+      <tr>
+        <td><code>create_file</code></td>
+        <td>Creates new files and parent directories on disk.</td>
+        <td>Verified path containment; creates real physical files.</td>
+      </tr>
+      <tr>
+        <td><code>update_file</code></td>
+        <td>Overwrites or updates existing files with new content.</td>
+        <td>Validates file pre-existence and path containment.</td>
+      </tr>
+      <tr>
+        <td><code>delete_file</code></td>
+        <td>Safely removes files.</td>
+        <td>Policy enforcement: flags <code>approval_required</code> to prevent accidental data loss.</td>
+      </tr>
+      <tr>
+        <td><code>run_command</code></td>
+        <td>Executes shell and CLI commands via subprocess.</td>
+        <td>30-second timeout enforcement, contained working directory.</td>
+      </tr>
+      <tr>
+        <td><code>inspect_runtime</code></td>
+        <td>Discovers installed developer tooling.</td>
+        <td>Detects Python, Node.js, npm, pnpm, and Git versions.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>3. Real-Time Telemetry & SSE Streaming Architecture</h2>
+  <p>Fraiday streams live event updates to the client via <code>GET /api/runs/{id}/events</code>:</p>
+  <ul>
+    <li><code>node_started</code> / <code>node_completed</code> — State machine node transitions.</li>
+    <li><code>plan_created</code> — Emits structured task lists to the UI checklist.</li>
+    <li><code>context_loaded</code> — Streams active workspace files, detected runtimes, and session history.</li>
+    <li><code>tool_call_started</code> / <code>tool_call_completed</code> — Live commands, arguments, durations, and output streams.</li>
+    <li><code>file_created</code> / <code>file_updated</code> / <code>file_deleted</code> — Real-time disk write notifications.</li>
+    <li><code>validation_result</code> — Audit and test outcome reports.</li>
+  </ul>
+
+  <h2>4. Neo-Brutalist Web UI Workspace</h2>
+  <p>Built with Next.js 14, Tailwind CSS, and Lucide Icons:</p>
+  <ul>
+    <li><strong>Live Execution Graph:</strong> Real-time status indicators across Orchestrator, Researcher, Executor, Validator, and Recovery.</li>
+    <li><strong>Dynamic Work Plan:</strong> Real-time checklist updating task states (pending, in progress, completed).</li>
+    <li><strong>Agent Activity Stream:</strong> Chronological tool call cards with color-coded terminal stdout and stderr.</li>
+    <li><strong>Run Context & Artifacts:</strong> Live view of files touched, created, or modified during execution.</li>
+    <li><strong>Model & Mode Switcher:</strong> Quick-select modal for Fast, Balanced, or Deep Research modes.</li>
+  </ul>
+
+  <h2>5. Automation & DevOps Scripts</h2>
+  <ul>
+    <li><strong><code>start.bat</code>:</strong> Single-click launch script. Reads <code>.env</code>, starts FastAPI on port 8000, starts Next.js on port 3000, and opens <code>http://localhost:3000</code> in your default browser.</li>
+    <li><strong><code>sync.bat</code>:</strong> Single-click git automation. Checks status, stages changes, commits with automated timestamp (or custom message), and pushes to GitHub <code>origin main</code>.</li>
+    <li><strong>Secret Protection:</strong> 100% compliant with GitHub Push Protection. All API keys managed via local ignored <code>.env</code>.</li>
+  </ul>
+
+  <h2>6. Test Verification Matrix</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Test Suite</th>
+        <th>Coverage Area</th>
+        <th>Result</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>tests/test_workspace_security.py</code></td>
+        <td>Path traversal, containment boundaries, directory escaping</td>
+        <td><span class="badge badge-success">7 / 7 Passed</span></td>
+      </tr>
+      <tr>
+        <td><code>scripts/test_phase3.py</code></td>
+        <td>Graph transitions, Groq LLM inference, SSE stream</td>
+        <td><span class="badge badge-success">Passed</span></td>
+      </tr>
+      <tr>
+        <td><code>scripts/test_phase4_5.py</code></td>
+        <td>Workspace manager integration, runtime detection, containment</td>
+        <td><span class="badge badge-success">All (A-F) Passed</span></td>
+      </tr>
+      <tr>
+        <td><code>scripts/test_phase4_6_demos.py</code></td>
+        <td>File CRUD: create, update, read, and delete policy</td>
+        <td><span class="badge badge-success">All 4 Demos Passed</span></td>
+      </tr>
+      <tr>
+        <td><code>sync.bat</code></td>
+        <td>Automated git staging, committing, and push to GitHub</td>
+        <td><span class="badge badge-success">Verified & Up to Date</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <footer style="margin-top: 40px; padding-top: 16px; border-top: 1px solid #ccc; font-size: 0.85rem; color: #777; text-align: center;">
+    Fraiday Autonomous Execution Workspace &copy; 2026. All rights reserved.
+  </footer>
+</body>
+</html>
