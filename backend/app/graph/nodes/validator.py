@@ -87,8 +87,15 @@ async def validator_node(state: dict) -> dict:
             proc_obs = [o for o in observations if "exit_code" in o]
             if not proc_obs:
                 last_obs = observations[-1]
-                if last_obs.get("tool") in ["read_file", "create_file"] and (last_obs.get("stdout") or last_obs.get("filename")):
-                    result = {"valid": True, "reason": "File content successfully processed and verified in workspace."}
+                tool_name = (last_obs.get("tool") or last_obs.get("action") or "").lower()
+                is_success = last_obs.get("success", False)
+                if tool_name in ["read_file", "create_file", "write_file", "update_file", "list_directory", "inspect_workspace"]:
+                    if is_success:
+                        result = {"valid": True, "reason": f"Workspace operation '{tool_name}' verified successfully."}
+                    else:
+                        result = {"valid": False, "reason": f"Workspace operation '{tool_name}' failed."}
+                elif is_success:
+                    result = {"valid": True, "reason": "Workspace execution completed and verified successfully."}
                 else:
                     result = {"valid": False, "reason": "No execution observation found."}
             else:
@@ -106,7 +113,7 @@ async def validator_node(state: dict) -> dict:
                     failed_reqs = []
                     if expected_strings:
                         for req in expected_strings:
-                            if req not in all_stdouts:
+                            if req not in all_stdouts and req.lower() not in all_stdouts.lower():
                                 failed_reqs.append(req)
 
                     if failed_reqs:
