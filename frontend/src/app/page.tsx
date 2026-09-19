@@ -1,3 +1,4 @@
+/* eslint-disable react/jsx-no-comment-textnodes, react/no-unescaped-entities, react-hooks/exhaustive-deps */
 "use client";
 import React, { useState, useEffect } from "react";
 
@@ -8,6 +9,15 @@ interface ToolActivity {
   detail?: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'approval_required';
   timestamp: string;
+}
+interface WorkspaceFile {
+  name: string;
+  path: string;
+  size: number;
+  modified_at: string;
+  mime_type: string;
+  extension: string;
+  is_text: boolean;
 }
 
 export default function FraidayWorkspace() {
@@ -40,6 +50,14 @@ export default function FraidayWorkspace() {
   const [validationResult, setValidationResult] = useState<any>(null);
   const [finalResult, setFinalResult] = useState<any>(null);
   const [errorInfo, setErrorInfo] = useState<{ node?: string; message: string; error_type?: string } | null>(null);
+  const [rightTab, setRightTab] = useState<'context' | 'files' | 'artifacts'>('context');
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
+  const [fileViewMode, setFileViewMode] = useState<"list" | "explorer">("list");
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+
+  const [selectedFile, setSelectedFile] = useState<{ info: WorkspaceFile; content?: string; previewable?: boolean } | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   // Fetch real workspace and runtime information from backend on mount
   useEffect(() => {
@@ -66,6 +84,173 @@ export default function FraidayWorkspace() {
       timestamp: new Date().toLocaleTimeString()
     };
     setActivityStream(prev => [...prev, activity]);
+  };
+
+
+
+  type WorkspaceTreeNode = {
+    name: string;
+    path: string;
+    isDir: boolean;
+    children: WorkspaceTreeNode[];
+    file?: WorkspaceFile;
+  };
+
+  const buildWorkspaceTree = (files: WorkspaceFile[]): WorkspaceTreeNode[] => {
+    const root: WorkspaceTreeNode[] = [];
+
+    const getDirectory = (children: WorkspaceTreeNode[], name: string, path: string) => {
+      let node = children.find(item => item.isDir && item.name === name);
+      if (!node) {
+        node = { name, path, isDir: true, children: [] };
+        children.push(node);
+      }
+      return node;
+    };
+
+    for (const file of files) {
+      const parts = file.path.replaceAll("\\", "/").split("/").filter(Boolean);
+      let children = root;
+      let currentPath = "";
+
+      parts.forEach((part, index) => {
+        currentPath = currentPath ? `${currentPath}/${part}` : part;
+        if (index === parts.length - 1) {
+          children.push({ name: part, path: currentPath, isDir: false, children: [], file });
+        } else {
+          children = getDirectory(children, part, currentPath).children;
+        }
+      });
+    }
+
+    const sortNodes = (nodes: WorkspaceTreeNode[]) => {
+      nodes.sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      });
+      nodes.forEach(node => node.isDir && sortNodes(node.children));
+    };
+
+    sortNodes(root);
+    return root;
+  };
+
+  const workspaceTree = buildWorkspaceTree(workspaceFiles);
+
+  const toggleFolder = (path: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const expandAllFolders = () => {
+    const next = new Set<string>();
+    const visit = (nodes: WorkspaceTreeNode[]) => nodes.forEach(node => {
+      if (node.isDir) {
+        next.add(node.path);
+        visit(node.children);
+      }
+    });
+    visit(workspaceTree);
+    setExpandedFolders(next);
+  };
+
+  const collapseAllFolders = () => setExpandedFolders(new Set());
+
+  const fetchWorkspaceFiles = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/files/");
+      if (res.ok) {
+        const data = await res.json();
+        setWorkspaceFiles(data.files || []);
+      }
+    } catch (e) {
+      console.warn("Files API not reachable", e);
+    }
+  };
+
+  const openWorkspaceFile = async (info: WorkspaceFile) => {
+    setFileLoading(true);
+    setSelectedFile({ info, content: "", previewable: true });
+    try {
+      const res = await fetch(
+        `http://localhost:8000/api/files/content?path=${encodeURIComponent(info.path)}`
+      );
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.detail || `Preview failed (${res.status})`);
+      }
+
+      setSelectedFile({
+        info,
+        content: data.previewable === false
+          ? "Preview unavailable for this file type. Use DOWNLOAD."
+          : (data.content || ""),
+        previewable: data.previewable !== false,
+      });
+    } catch (error) {
+      console.error("File preview failed:", error);
+      setSelectedFile({
+        info,
+        content: "Unable to preview this file. Use DOWNLOAD or check the backend terminal.",
+        previewable: false,
+      });
+    } finally {
+      setFileLoading(false);
+    }
+  };
+
+  const downloadWorkspaceFile = async (path: string) => {
+    try {
+      const res = await fetch(
+        `http://localhost:8000/api/files/download?path=${encodeURIComponent(path)}`
+      );
+      if (!res.ok) {
+        throw new Error(`Download failed (${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = path.split("/").pop() || "download";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("File download failed:", error);
+      alert(`Unable to download ${path}. Check that the backend is running.`);
+    }
+  };
+
+  const uploadWorkspaceFiles = async (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(fileList)) {
+        const res = await fetch(
+          `http://localhost:8000/api/files/upload?filename=${encodeURIComponent(file.name)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+            body: await file.arrayBuffer()
+          }
+        );
+        if (!res.ok) throw new Error(`Upload failed: ${file.name}`);
+      }
+      await fetchWorkspaceFiles();
+      setRightTab("files");
+    } catch (e) {
+      console.error(e);
+      alert("Upload failed. Check the backend terminal.");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const startRun = async () => {
@@ -150,6 +335,7 @@ export default function FraidayWorkspace() {
               status: isApproval ? 'approval_required' : (isSuccess ? 'completed' : 'failed')
             });
           } else if (type === 'file_created') {
+            fetchWorkspaceFiles();
             setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
             setArtifacts(prev => [...prev, { path: eventData.path, operation: 'created', type: 'file' }]);
             addActivity({
@@ -159,6 +345,7 @@ export default function FraidayWorkspace() {
               status: 'completed'
             });
           } else if (type === 'file_updated') {
+            fetchWorkspaceFiles();
             setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
             setArtifacts(prev => [...prev, { path: eventData.path, operation: 'updated', type: 'file' }]);
             addActivity({
@@ -168,6 +355,7 @@ export default function FraidayWorkspace() {
               status: 'completed'
             });
           } else if (type === 'file_read') {
+            fetchWorkspaceFiles();
             setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
             addActivity({
               type: 'CRUD',
@@ -176,6 +364,7 @@ export default function FraidayWorkspace() {
               status: eventData.success ? 'completed' : 'failed'
             });
           } else if (type === 'file_deleted') {
+            fetchWorkspaceFiles();
             setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
             const isApproval = eventData.status === 'approval_required';
             addActivity({
@@ -683,101 +872,192 @@ export default function FraidayWorkspace() {
 
               {/* RightInspectorPanel */}
               <aside className="w-80 bg-fra-cream flex flex-col overflow-y-auto select-none font-mono">
-                <div className="grid grid-cols-4 border-b-2 border-fra-black text-[11px] font-bold text-center">
-                  <button className="py-2.5 bg-fra-yellow border-r-2 border-fra-black font-extrabold text-black">Context</button>
-                  <button className="py-2.5 bg-neutral-200 border-r-2 border-fra-black hover:bg-fra-yellow" onClick={() => setView('agents')}>Agents</button>
-                  <button className="py-2.5 bg-neutral-200 border-r-2 border-fra-black hover:bg-fra-yellow" onClick={() => alert('Files in workspace: ' + workspaceRoot)}>Files</button>
-                  <button className="py-2.5 bg-neutral-200 hover:bg-fra-yellow" onClick={() => alert('Artifacts: ' + (artifacts.length || 0))}>Artifacts</button>
+                <div className="grid grid-cols-3 border-b-2 border-fra-black text-[11px] font-bold text-center">
+                  {(['context', 'files', 'artifacts'] as const).map(tab => (
+                    <button key={tab} className={`py-2.5 border-r-2 last:border-r-0 border-fra-black ${rightTab === tab ? 'bg-fra-yellow font-extrabold' : 'bg-neutral-200 hover:bg-fra-yellow'}`} onClick={() => setRightTab(tab)}>
+                      {tab.toUpperCase()}
+                    </button>
+                  ))}
                 </div>
-                <div className="p-4 space-y-5 flex-1">
-                  
-                  {/* CONTEXT PANEL (STEP 10) */}
-                  <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
-                    <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN CONTEXT</div>
-                    <div className="space-y-1.5 text-[10px]">
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">WORKSPACE</span>
-                        <span className="font-bold text-black">{workspace}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">ROOT DIRECTORY</span>
-                        <span className="font-bold text-black truncate max-w-[160px]" title={workspaceRoot}>{workspaceRoot}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">ACTIVE RUNTIME</span>
-                        <span className="font-bold text-fra-green">Python {runtimeInfo?.python?.version || "3.x"}</span>
-                      </div>
-                      <div className="pt-1">
-                        <span className="text-neutral-600 block mb-1">RELEVANT FILES:</span>
-                        {relevantFiles.length === 0 ? (
-                          <span className="text-neutral-400 italic">None accessed yet</span>
-                        ) : (
-                          <div className="space-y-0.5">
-                            {relevantFiles.map(f => (
-                              <div key={f} className="text-black font-bold bg-white px-1 border border-neutral-300">
-                                {f}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* ARTIFACTS PANEL (STEP 15) */}
-                  <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
-                    <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN ARTIFACTS</div>
-                    {artifacts.length === 0 ? (
-                      <div className="text-[10px] text-neutral-400 italic">No artifacts generated yet.</div>
-                    ) : (
-                      <div className="space-y-1.5 text-[10px]">
-                        {artifacts.map((art, idx) => (
-                          <div key={idx} className="flex items-center justify-between border border-black bg-white p-1.5">
-                            <span className="font-bold">{art.path}</span>
-                            <span className="text-[9px] uppercase font-bold bg-fra-yellow px-1 border border-black">{art.operation}</span>
+                <div className="p-3 space-y-3 flex-1">
+                  {rightTab === 'context' && (
+                    <>
+                      <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
+                        <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN CONTEXT</div>
+                        <div className="space-y-1.5 text-[10px]">
+                          <div className="flex justify-between border-b border-neutral-200 pb-1"><span className="text-neutral-600">WORKSPACE</span><span className="font-bold">{workspace}</span></div>
+                          <div className="flex justify-between border-b border-neutral-200 pb-1"><span className="text-neutral-600">ROOT</span><span className="font-bold truncate max-w-[165px]" title={workspaceRoot}>{workspaceRoot}</span></div>
+                          <div className="flex justify-between"><span className="text-neutral-600">RUNTIME</span><span className="font-bold text-fra-green">Python {runtimeInfo?.python?.version || "3.x"}</span></div>
+                        </div>
+                      </div>
+                      <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
+                        <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RELEVANT FILES</div>
+                        {relevantFiles.length === 0 ? <div className="text-[10px] text-neutral-400 italic">None accessed yet.</div> :
+                          <div className="space-y-1">{relevantFiles.map(f => (
+                            <button key={f} onClick={() => {
+                              const found = workspaceFiles.find(x => x.path === f);
+                              if (found) { setRightTab('files'); openWorkspaceFile(found); }
+                            }} className="w-full text-left text-[10px] font-bold bg-white px-1.5 py-1 border border-neutral-300 hover:bg-fra-yellow truncate">{f}</button>
+                          ))}</div>}
+                      </div>
+                    </>
+                  )}
+
+                  {rightTab === 'files' && (
+                    <>
+                      <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
+                        <div className="flex items-center justify-between mb-2">
+                          <div><div className="font-black text-[12px] uppercase">FILES</div><div className="text-[9px] text-neutral-500">{workspaceFiles.length} workspace files</div></div>
+                          <button onClick={fetchWorkspaceFiles} className="border-2 border-black bg-white px-2 py-1 text-[9px] font-black hover:bg-fra-yellow">REFRESH</button>
+                        </div>
+                        <label className="block border-2 border-black bg-fra-yellow p-2 text-center text-[10px] font-black cursor-pointer shadow-brutal-sm hover:bg-yellow-300">
+                          {uploading ? "UPLOADING..." : "+ UPLOAD FILES"}
+                          <input type="file" multiple className="hidden" disabled={uploading} onChange={e => { uploadWorkspaceFiles(e.currentTarget.files); e.currentTarget.value = ""; }} />
+                        </label>
+                        <div className="grid grid-cols-2 gap-1 mt-2 border-2 border-black bg-white p-1">
+                          <button
+                            onClick={() => setFileViewMode("list")}
+                            className={`px-2 py-1 text-[8px] font-black ${fileViewMode === "list" ? "bg-fra-yellow" : "bg-white hover:bg-neutral-100"}`}
+                          >
+                            LIST
+                          </button>
+                          <button
+                            onClick={() => setFileViewMode("explorer")}
+                            className={`px-2 py-1 text-[8px] font-black ${fileViewMode === "explorer" ? "bg-fra-yellow" : "bg-white hover:bg-neutral-100"}`}
+                          >
+                            EXPLORER
+                          </button>
+                        </div>
+                      </div>
+
+                                            {fileViewMode === "list" ? (
+<div className="space-y-1.5">
+                        {workspaceFiles.length === 0 ? (
+                          <div className="border-2 border-dashed border-neutral-400 p-5 text-center text-[10px] text-neutral-500">No files found.</div>
+                        ) : workspaceFiles.map(file => (
+                          <div key={file.path} className="border-2 border-fra-black bg-white p-2 shadow-brutal-sm">
+                            <button className="w-full text-left" onClick={() => openWorkspaceFile(file)}>
+                              <div className="flex items-center gap-2">
+                                <span className="w-7 h-7 border-2 border-black bg-fra-yellow flex items-center justify-center text-[8px] font-black">{file.extension ? file.extension.slice(1, 5).toUpperCase() : "FILE"}</span>
+                                <div className="min-w-0 flex-1"><div className="font-bold text-[10px] truncate">{file.name}</div><div className="text-[8px] text-neutral-500 truncate">{file.path}</div></div>
+                              </div>
+                            </button>
+                            <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-neutral-200">
+                              <span className="text-[8px] text-neutral-500">{(file.size / 1024).toFixed(1)} KB</span>
+                              <div className="flex gap-1">
+                                <button onClick={() => openWorkspaceFile(file)} className="border border-black px-1.5 py-0.5 text-[8px] font-bold hover:bg-fra-yellow">OPEN</button>
+                                <button onClick={() => downloadWorkspaceFile(file.path)} className="border border-black px-1.5 py-0.5 text-[8px] font-bold hover:bg-fra-yellow">DOWNLOAD</button>
+                              </div>
+                            </div>
                           </div>
                         ))}
                       </div>
-                    )}
-                  </div>
-                  
-                  {/* WORKSPACE RUNTIME PANEL */}
-                  <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
-                    <div className="font-bold text-[11px] uppercase tracking-wider mb-2">WORKSPACE RUNTIME</div>
-                    <div className="space-y-1.5 text-[10px]">
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">Python Runtime</span>
-                        <span className="font-bold text-fra-green">
-                          {runtimeInfo?.python?.version ? `v${runtimeInfo.python.version} READY` : "READY"}
-                        </span>
-                      </div>
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">Node.js Engine</span>
-                        <span className="font-bold text-fra-green">
-                          {runtimeInfo?.node?.version ? `v${runtimeInfo.node.version} READY` : "READY"}
-                        </span>
-                      </div>
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">Git SCM</span>
-                        <span className="font-bold text-fra-green">
-                          {runtimeInfo?.git?.version ? `v${runtimeInfo.git.version} READY` : "READY"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
+                      ) : (
 
-                  <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
-                    <div className="font-bold text-[11px] uppercase tracking-wider mb-2">QUICK ACTIONS</div>
-                    <div className="grid grid-cols-2 gap-2 text-[11px]">
-                      <button className="border-2 border-fra-black bg-fra-cream-card p-2 font-bold shadow-brutal-sm hover:bg-fra-yellow flex items-center justify-center space-x-1" onClick={() => setView('runs')}>
-                        <span>View Runs</span>
-                      </button>
-                      <button className="border-2 border-fra-black bg-fra-cream-card p-2 font-bold shadow-brutal-sm hover:bg-fra-yellow flex items-center justify-center space-x-1" onClick={() => alert('Files in: ' + workspaceRoot)}>
-                        <span>Open Root</span>
-                      </button>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between border-2 border-fra-black bg-white px-2 py-1.5">
+                          <span className="font-black text-[9px] uppercase">Workspace Explorer</span>
+                          <div className="flex gap-1">
+                            <button onClick={expandAllFolders} className="border border-black px-1.5 py-0.5 text-[7px] font-black hover:bg-fra-yellow">EXPAND</button>
+                            <button onClick={collapseAllFolders} className="border border-black px-1.5 py-0.5 text-[7px] font-black hover:bg-fra-yellow">COLLAPSE</button>
+                          </div>
+                        </div>
+
+                        <div className="border-2 border-fra-black bg-white shadow-brutal-sm p-1 font-mono text-[10px]">
+                          {workspaceTree.length === 0 ? (
+                            <div className="p-4 text-center text-neutral-500 text-[9px]">No files found.</div>
+                          ) : workspaceTree.map(node => {
+                            const renderNode = (item: WorkspaceTreeNode, depth: number): React.ReactNode => {
+                              const indent = 4 + depth * 14;
+
+                              if (item.isDir) {
+                                const open = expandedFolders.has(item.path);
+                                return (
+                                  <div key={item.path}>
+                                    <button
+                                      onClick={() => toggleFolder(item.path)}
+                                      className="w-full flex items-center gap-1 py-1 text-left hover:bg-fra-yellow"
+                                      style={{ paddingLeft: `${indent}px` }}
+                                    >
+                                      <span className="w-3 font-black">{open ? "▾" : "▸"}</span>
+                                      <span className="font-black">{item.name}/</span>
+                                    </button>
+                                    {open && item.children.map(child => renderNode(child, depth + 1))}
+                                  </div>
+                                );
+                              }
+
+                              const file = item.file;
+                              if (!file) return null;
+
+                              return (
+                                <div key={item.path} className="group flex items-center gap-1 py-1 hover:bg-yellow-100" style={{ paddingLeft: `${indent}px` }}>
+                                  <button
+                                    onClick={() => openWorkspaceFile(file)}
+                                    className="min-w-0 flex-1 truncate text-left"
+                                    title={file.path}
+                                  >
+                                    <span className="mr-1 text-neutral-400">•</span>{item.name}
+                                  </button>
+                                  <button
+                                    onClick={() => downloadWorkspaceFile(file.path)}
+                                    className="hidden group-hover:block border border-black bg-white px-1 text-[7px] font-black hover:bg-fra-yellow"
+                                  >
+                                    ↓
+                                  </button>
+                                </div>
+                              );
+                            };
+
+                            return renderNode(node, 0);
+                          })}
+                        </div>
+                      </div>
+
+                      )}
+                    </>
+                  )}
+
+                  {rightTab === 'artifacts' && (
+                    <>
+                      <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
+                        <div className="font-black text-[12px] uppercase">RUN ARTIFACTS</div>
+                        <div className="text-[9px] text-neutral-500 mt-1">{artifacts.length} generated artifact(s)</div>
+                      </div>
+                      {artifacts.length === 0 ? <div className="border-2 border-dashed border-neutral-400 p-5 text-center text-[10px] text-neutral-500">No artifacts generated yet.</div> :
+                        artifacts.map((art, idx) => {
+                          const info = workspaceFiles.find(x => x.path === art.path);
+                          return <div key={idx} className="border-2 border-fra-black bg-white p-2 shadow-brutal-sm">
+                            <div className="font-bold text-[10px] truncate">{art.path}</div>
+                            <div className="flex gap-1 mt-2">
+                              {info && <button onClick={() => openWorkspaceFile(info)} className="border border-black px-1.5 py-0.5 text-[8px] font-bold hover:bg-fra-yellow">OPEN</button>}
+                              {info && <button onClick={() => downloadWorkspaceFile(info.path)} className="border border-black px-1.5 py-0.5 text-[8px] font-bold hover:bg-fra-yellow">DOWNLOAD</button>}
+                            </div>
+                          </div>
+                        })}
+                    </>
+                  )}
+                </div>
+
+                {selectedFile && (
+                  <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={() => setSelectedFile(null)}>
+                    <div className="w-full max-w-3xl max-h-[85vh] border-2 border-black bg-fra-cream shadow-brutal-lg flex flex-col" onClick={e => e.stopPropagation()}>
+                      <div className="p-3 border-b-2 border-black flex items-center justify-between bg-fra-yellow">
+                        <div className="min-w-0"><div className="font-black text-xs truncate">{selectedFile.info.name}</div><div className="text-[9px] font-mono truncate">{selectedFile.info.path}</div></div>
+                        <div className="flex gap-1">
+                          <button onClick={() => downloadWorkspaceFile(selectedFile.info.path)} className="border-2 border-black bg-white px-2 py-1 text-[9px] font-black">DOWNLOAD</button>
+                          <button onClick={() => setSelectedFile(null)} className="border-2 border-black bg-black text-white px-2 py-1 text-[9px] font-black">X</button>
+                        </div>
+                      </div>
+                      <div className="flex-1 overflow-auto p-3 bg-white">
+                        {fileLoading ? <div className="font-mono text-xs">Loading...</div> :
+                          selectedFile.previewable ? <pre className="font-mono text-[11px] leading-5 whitespace-pre-wrap break-words">{selectedFile.content}</pre> :
+                          <div className="font-mono text-xs text-neutral-500">Preview unavailable for this file type. Use DOWNLOAD.</div>}
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
               </aside>
             </div>
           )}
@@ -887,3 +1167,5 @@ export default function FraidayWorkspace() {
     </>
   );
 }
+
+
