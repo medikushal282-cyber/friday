@@ -69,7 +69,10 @@ async def execute_run_task(
         "status": "started",
         "error": None,
         "retry_count": 0,
+        # Human-in-the-loop approval state
         "approval_required": False,
+        "approval_status": "none",
+        "approval_request": None,
         "autonomous_iteration_count": 0,
         "replan_count": 0,
         "recovery_attempts": 0
@@ -134,6 +137,25 @@ async def execute_run_task(
             await emit(run_id, "node_completed", current_node_name, data)
             runs_db[run_id]["state"] = state
 
+            # Pause the run when a destructive action requires human approval.
+            if (
+                state.get("approval_required") is True
+                and state.get("approval_status") == "pending"
+            ):
+                runs_db[run_id]["status"] = "paused"
+
+                await emit(
+                    run_id,
+                    "approval_required",
+                    "executor",
+                    {
+                        "status": "pending",
+                        "request": state.get("approval_request")
+                    }
+                )
+
+                return
+
             if current_node_name == "validator" and state["current_step"] == "end":
                 break
 
@@ -166,3 +188,217 @@ async def execute_run_task(
         }
         runs_db[run_id]["state"]["error"] = error_payload
         await emit(run_id, "run_failed", node=current_node_name, data=error_payload)
+
+
+async def resume_approved_run(
+    run_id: str,
+    decision: str,
+    runs_db: dict
+):
+    run = runs_db.get(run_id)
+
+    if not run:
+        raise ValueError("Run not found")
+
+    state = run.get("state", {})
+
+    if run.get("status") != "paused":
+        raise ValueError("Run is not waiting for approval")
+
+    if not state.get("approval_required"):
+        raise ValueError("Run has no pending approval request")
+
+    if state.get("approval_status") != "pending":
+        raise ValueError("Approval request is no longer pending")
+
+    approval_request = state.get("approval_request") or {}
+
+    if decision == "reject":
+        state["approval_required"] = False
+        state["approval_status"] = "rejected"
+        state["status"] = "completed"
+
+        state.setdefault("observations", []).append({
+            "tool": approval_request.get("tool"),
+            "path": approval_request.get("path"),
+            "status": "rejected",
+            "message": "User rejected the destructive action.",
+            "exit_code": 0
+        })
+
+        run["state"] = state
+        run["status"] = "completed"
+
+        await emit(
+            run_id,
+            "approval_rejected",
+            "executor",
+            {
+                "status": "rejected",
+                "request": approval_request
+            }
+        )
+
+        await emit(
+            run_id,
+            "run_completed",
+            data={
+                "final_status": "rejected"
+            }
+        )
+
+        return state
+
+    if decision != "approve":
+        raise ValueError("Decision must be 'approve' or 'reject'")
+
+    if approval_request.get("tool") != "delete_file":
+        raise ValueError("Unsupported approval action")
+
+    target_file = approval_request.get("path")
+
+    if not target_file:
+        raise ValueError("Approval request is missing the target path")
+
+    from app.workspace.tools import execute_tool
+
+    await emit(
+        run_id,
+        "approval_granted",
+        "executor",
+        {
+            "status": "approved",
+            "request": approval_request
+        }
+    )
+
+    await emit(
+        run_id,
+        "tool_call_started",
+        "executor",
+        {
+            "tool": "delete_file",
+            "path": target_file,
+            "approved": True
+        }
+    )
+
+    del_res = await asyncio.to_thread(
+        execute_tool,
+        "delete_file",
+        path=target_file,
+        approved=True
+    )
+
+    await emit(
+        run_id,
+        "tool_call_completed",
+        "executor",
+        del_res
+    )
+
+    if not del_res.get("success"):
+        state["approval_required"] = False
+        state["approval_status"] = "approved"
+        state["status"] = "failed"
+        state["error"] = {
+            "error_type": "DeleteFailed",
+            "message": del_res.get("error", "Approved deletion failed."),
+            "node": "executor"
+        }
+
+        run["state"] = state
+        run["status"] = "failed"
+
+        await emit(
+            run_id,
+            "run_failed",
+            "executor",
+            state["error"]
+        )
+
+        return state
+
+    state["approval_required"] = False
+    state["approval_status"] = "approved"
+    state["approval_request"] = None
+
+    state.setdefault("observations", []).append({
+        "tool": "delete_file",
+        "path": target_file,
+        "status": "deleted",
+        "exit_code": 0
+    })
+
+    await emit(
+        run_id,
+        "file_deleted",
+        "executor",
+        {
+            "path": target_file,
+            "status": "deleted"
+        }
+    )
+
+    state["current_step"] = "validator"
+    state["status"] = "running"
+    run["state"] = state
+    run["status"] = "running"
+
+    # Resume the remaining workflow from the validator.
+    while state["current_step"] != "end":
+        current_node_name = state["current_step"]
+
+        if current_node_name not in nodes:
+            break
+
+        node_fn = nodes[current_node_name]
+
+        await emit(
+            run_id,
+            "node_started",
+            current_node_name,
+            {
+                "step": current_node_name
+            }
+        )
+
+        state = await node_fn(state)
+
+        data = {
+            "next": state["current_step"]
+        }
+
+        if current_node_name == "validator":
+            data["validation_results"] = state.get(
+                "validation_results",
+                []
+            )[-1:]
+
+        elif current_node_name == "recovery":
+            data["observations"] = state.get(
+                "observations",
+                []
+            )[-3:]
+
+        await emit(
+            run_id,
+            "node_completed",
+            current_node_name,
+            data
+        )
+
+        run["state"] = state
+
+    run["state"] = state
+    run["status"] = "completed"
+
+    await emit(
+        run_id,
+        "run_completed",
+        data={
+            "final_status": "completed"
+        }
+    )
+
+    return state

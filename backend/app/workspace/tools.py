@@ -250,34 +250,55 @@ def tool_update_file(path: str, content: str) -> Dict[str, Any]:
             "error": {"code": "TOOL_EXECUTION_ERROR", "message": str(e)}
         }
 
-def tool_delete_file(path: str) -> Dict[str, Any]:
+def tool_delete_file(path: str, approved: bool = False) -> Dict[str, Any]:
     ws = get_workspace_manager()
     try:
         # Validate path containment first
         full_path = ws.resolve_path(path)
-        reason = "Destructive file deletion requires explicit user approval."
+        if not approved:
+            reason = "Destructive file deletion requires explicit user approval."
+            return {
+                "success": False,
+                "tool": "delete_file",
+                "path": path,
+                "status": "approval_required",
+                "reason": reason,
+                "policy": POLICY_APPROVAL_REQUIRED,
+                "result": {
+                    "status": "approval_required",
+                    "reason": reason,
+                    "policy": POLICY_APPROVAL_REQUIRED
+                },
+                "error": {
+                    "code": "APPROVAL_REQUIRED",
+                    "message": reason
+                }
+            }
+
+        result = ws.delete_file(path)
+        if result.get("success"):
+            return {
+                "success": True,
+                "tool": "delete_file",
+                "path": path,
+                "status": "deleted",
+                "result": {"path": path, "status": "deleted"},
+                "error": None
+            }
         return {
             "success": False,
             "tool": "delete_file",
             "path": path,
-            "status": "approval_required",
-            "reason": reason,
-            "policy": POLICY_APPROVAL_REQUIRED,
-            "result": {
-                "status": "approval_required",
-                "reason": reason,
-                "policy": POLICY_APPROVAL_REQUIRED
-            },
-            "error": {
-                "code": "APPROVAL_REQUIRED",
-                "message": reason
-            }
+            "status": "failed",
+            "result": None,
+            "error": {"code": "TOOL_EXECUTION_ERROR", "message": result.get("error", "File deletion failed.")}
         }
     except PathSecurityError as e:
         return {
             "success": False,
             "tool": "delete_file",
             "path": path,
+            "status": "failed",
             "result": None,
             "error": {"code": "PATH_SECURITY_ERROR", "message": str(e)}
         }
@@ -286,6 +307,7 @@ def tool_delete_file(path: str) -> Dict[str, Any]:
             "success": False,
             "tool": "delete_file",
             "path": path,
+            "status": "failed",
             "result": None,
             "error": {"code": "TOOL_EXECUTION_ERROR", "message": str(e)}
         }

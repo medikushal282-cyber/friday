@@ -446,10 +446,18 @@ async def executor_node(state: dict) -> dict:
 
             if res.get("status") == "approval_required":
                 state["approval_required"] = True
+                state["approval_status"] = "pending"
+                state["approval_request"] = {
+                    "tool": "delete_file",
+                    "path": rel_path,
+                    "reason": res.get("reason", "Destructive file deletion requires explicit user approval.")
+                }
                 step["status"] = "blocked"
+                await emit(run_id, "approval_requested", "executor", state["approval_request"])
                 await emit(run_id, "step_completed", "executor", {"step_id": step_id, "status": "blocked"})
                 break
             else:
+                await emit(run_id, "file_deleted", "executor", {"path": rel_path, "status": res.get("status")})
                 step["result"] = res
                 step["status"] = "completed" if res.get("success") else "failed"
                 await emit(run_id, "step_completed" if res.get("success") else "step_failed", "executor", {"step_id": step_id, "status": step["status"]})
@@ -457,7 +465,7 @@ async def executor_node(state: dict) -> dict:
         elif action in ["RUN_COMMAND", "EXECUTE"]:
             cmd_str = args.get("command")
             if not cmd_str:
-                cmd_str = f"{python_exe} {target}"
+                cmd_str = f'"{python_exe}" "{target}"'
 
             # --- PRE-EXECUTION ARTIFACT SYNTAX VALIDATION ---
             if target.endswith(".py"):
@@ -515,6 +523,10 @@ async def executor_node(state: dict) -> dict:
         else:
             step["status"] = "completed"
             await emit(run_id, "step_completed", "executor", {"step_id": step_id, "status": step["status"]})
+
+    if state.get("approval_status") == "pending":
+        state["status"] = "paused"
+        return state
 
     state["current_step"] = "validator"
     return state
