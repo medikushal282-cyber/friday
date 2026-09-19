@@ -278,5 +278,119 @@ class TestActivity5AutonomousExecution(unittest.TestCase):
             content = f.read()
         self.assertNotIn("insight NameError", content)
 
+    # PHASE 14 DETERMINISTIC TESTS (TESTS 1 - 12)
+    def test_phase14_1_create_basic_html_file(self):
+        run_id = "test_p14_1"
+        obj = "can u generate a basic html file"
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+        self.assertTrue(os.path.exists(os.path.join(self.root, "index.html")))
+
+    def test_phase14_2_html_with_heading_and_button(self):
+        run_id = "test_p14_2"
+        obj = "Create a basic HTML page named index.html with a heading and button."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+        html_p = os.path.join(self.root, "index.html")
+        self.assertTrue(os.path.exists(html_p))
+        with open(html_p, "r", encoding="utf-8") as f:
+            c = f.read().lower()
+        self.assertTrue("h1" in c or "head" in c)
+        self.assertTrue("button" in c)
+
+    def test_phase14_3_html_and_css_linked(self):
+        run_id = "test_p14_3"
+        obj = "Create an HTML page named index.html and a stylesheet named styles.css. Link the stylesheet from the HTML."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+        self.assertTrue(os.path.exists(os.path.join(self.root, "index.html")))
+        self.assertTrue(os.path.exists(os.path.join(self.root, "styles.css")))
+
+    def test_phase14_4_python_script_and_run(self):
+        run_id = "test_p14_4"
+        obj = "Create a Python script named hello.py that prints Hello Fraiday, run it, and verify the output."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+
+    def test_phase14_5_json_config_file(self):
+        run_id = "test_p14_5"
+        obj = "Create a JSON file named config.json containing name Fraiday and version 1."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+        self.assertTrue(os.path.exists(os.path.join(self.root, "config.json")))
+
+    def test_phase14_6_readme_markdown(self):
+        run_id = "test_p14_6"
+        obj = "Create README.md explaining how to run the generated project."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+        self.assertTrue(os.path.exists(os.path.join(self.root, "README.md")))
+
+    def test_phase14_7_js_script_and_run(self):
+        run_id = "test_p14_7"
+        obj = "Create a JavaScript file named hello.js that prints Hello Fraiday and execute it using an available runtime."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+        self.assertTrue(os.path.exists(os.path.join(self.root, "hello.js")))
+
+    def test_phase14_8_corrupted_model_response(self):
+        raw_corrupt = "Let me start by inspecting...\n<tool_call>\n...\n</tool_call>\n<!DOCTYPE html><html><body><h1>Clean</h1></body></html>"
+        valid, clean, err = extract_and_validate_artifact("test.html", raw_corrupt)
+        self.assertTrue(valid)
+        self.assertNotIn("<tool_call>", clean)
+        self.assertIn("Clean", clean)
+
+    def test_phase14_9_runtime_nameerror(self):
+        target_name = "test_nameerror.py"
+        target_p = os.path.join(self.root, target_name)
+        with open(target_p, "w", encoding="utf-8") as f:
+            f.write("insight NameError\nprint('fixed')\n")
+        run_id = "test_p14_9"
+        obj = f"Create a script named {target_name} that prints fixed."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+
+    def test_phase14_10_incomplete_plan_repair(self):
+        from app.graph.nodes.orchestrator import validate_and_repair_plan
+        bad_plan = [{"id": "step_1", "action": "LIST_DIRECTORY", "target": "."}]
+        repaired = validate_and_repair_plan(bad_plan, "Create a basic HTML file.", [])
+        work_actions = {"CREATE_FILE", "UPDATE_FILE", "RUN_COMMAND", "DELETE_FILE"}
+        self.assertTrue(any(s.get("action", "").upper() in work_actions for s in repaired))
+
+    def test_phase14_11_pure_inspection_task(self):
+        run_id = "test_p14_11"
+        obj = "List the files in the workspace."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["status"], "completed")
+
+    def test_phase14_12_destructive_request(self):
+        del_path = os.path.join(self.root, "temporary_test.txt")
+        with open(del_path, "w", encoding="utf-8") as f:
+            f.write("delete target\n")
+        run_id = "test_p14_12"
+        obj = "Delete temporary_test.txt."
+        runs_db = {run_id: {"run_id": run_id, "objective": obj, "status": "pending", "state": {}}}
+        asyncio.run(execute_run_task(run_id, obj, runs_db))
+        self.assertEqual(runs_db[run_id]["state"].get("approval_required"), True)
+
+    def test_context_not_stolen_on_new_creation(self):
+        from app.graph.nodes.orchestrator import determine_target_filename
+        fake_context = [
+            {"objective": "Create autonomy_recovery_test.py", "artifacts": [{"path": "autonomy_recovery_test.py"}]}
+        ]
+        target = determine_target_filename("create a python file to print hello world", fake_context)
+        self.assertNotEqual(target, "autonomy_recovery_test.py")
+        self.assertIn("hello", target)
+
 if __name__ == "__main__":
     unittest.main()
+

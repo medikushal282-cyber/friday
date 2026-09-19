@@ -4,6 +4,9 @@ from typing import Dict, Any, Optional, Union, Tuple, List
 
 from app.workspace.manager import get_workspace_manager, PathSecurityError, CommandDeniedError
 from app.workspace.policy import check_command_policy, POLICY_SAFE, POLICY_APPROVAL_REQUIRED, POLICY_DENIED
+from app.workspace.process_manager import (
+    get_process_registry, classify_command, COMMAND_NORMAL, COMMAND_LONG_RUNNING, COMMAND_WEB_PREVIEW
+)
 from app.events import emit
 from app.workspace.artifact_cleaner import extract_and_validate_artifact
 
@@ -31,6 +34,14 @@ TOOL_SCHEMAS = {
     "run_command": {
         "description": "Executes a safe process inside the workspace with cwd = workspace_root.",
         "parameters": {"command": "string or list of strings (required)", "timeout": "integer (optional, default 30)"}
+    },
+    "start_server": {
+        "description": "Launches a persistent web server or background process in non-blocking mode with startup verification.",
+        "parameters": {"command": "string or list (optional)", "target": "string (optional)", "port": "integer (optional, default 5500)"}
+    },
+    "stop_server": {
+        "description": "Stops a managed background process or preview server.",
+        "parameters": {"process_id": "string (optional)", "port": "integer (optional)"}
     },
     "inspect_runtime": {
         "description": "Returns runtime environment information for Python, Node, Git, etc.",
@@ -290,6 +301,93 @@ def tool_delete_file(path: str) -> Dict[str, Any]:
             "error": {"code": "TOOL_EXECUTION_ERROR", "message": str(e)}
         }
 
+def tool_start_server(
+    command: Optional[Union[str, List[str]]] = None,
+    target: str = "index.html",
+    port: int = 5500,
+    run_id: str = ""
+) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    reg = get_process_registry()
+    try:
+        cmd_kind = classify_command(command or "", action="START_SERVER") if command else COMMAND_WEB_PREVIEW
+
+        if cmd_kind == COMMAND_WEB_PREVIEW or not command:
+            res = reg.start_web_preview_server(
+                workspace_root=ws.root_path,
+                target_file=target,
+                preferred_port=port,
+                run_id=run_id
+            )
+        else:
+            res = reg.start_long_running_process(
+                command=command,
+                cwd=ws.root_path,
+                port=port,
+                run_id=run_id
+            )
+
+        if not res.get("success"):
+            return {
+                "success": False,
+                "tool": "start_server",
+                "command": str(command or f"python -m http.server {port}"),
+                "status": "failed",
+                "exit_code": 1,
+                "error": {"code": "SERVER_START_ERROR", "message": res.get("error", "Failed to start server")}
+            }
+
+        url = res.get("url") or f"http://localhost:{res.get('port', port)}/{target.lstrip('/')}"
+        result_payload = {
+            "status": "server_started",
+            "command": res.get("command"),
+            "port": res.get("port"),
+            "pid": res.get("pid"),
+            "url": url,
+            "reused": res.get("reused", False)
+        }
+        return {
+            "success": True,
+            "tool": "start_server",
+            "command": res.get("command"),
+            "exit_code": 0,
+            "stdout": f"Server started successfully at {url} (PID {res.get('pid')})",
+            "stderr": "",
+            "duration": 0.5,
+            "status": "server_started",
+            "url": url,
+            "port": res.get("port"),
+            "pid": res.get("pid"),
+            "result": result_payload,
+            "error": None
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "tool": "start_server",
+            "exit_code": 1,
+            "error": {"code": "TOOL_EXECUTION_ERROR", "message": str(e)}
+        }
+
+def tool_stop_server(process_id: Optional[str] = None, port: Optional[int] = None) -> Dict[str, Any]:
+    reg = get_process_registry()
+    try:
+        target_id = process_id or port or 5500
+        res = reg.stop_process(target_id)
+        return {
+            "success": res.get("success", False),
+            "tool": "stop_server",
+            "status": "stopped",
+            "result": res,
+            "error": None if res.get("success") else {"code": "STOP_SERVER_ERROR", "message": res.get("error")}
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "tool": "stop_server",
+            "error": {"code": "TOOL_EXECUTION_ERROR", "message": str(e)}
+        }
+
 def tool_run_command(command: Union[str, List[str]], timeout: int = 30) -> Dict[str, Any]:
     ws = get_workspace_manager()
     try:
@@ -325,6 +423,12 @@ def tool_run_command(command: Union[str, List[str]], timeout: int = 30) -> Dict[
                     "message": f"Command requires approval: {reason}"
                 }
             }
+
+        # --- NON-BLOCKING AUTOMATIC CLASSIFICATION FOR SERVERS ---
+        cmd_kind = classify_command(command)
+        if cmd_kind in [COMMAND_WEB_PREVIEW, COMMAND_LONG_RUNNING]:
+            # Automatically route long-running server command through tool_start_server to avoid hanging wait()
+            return tool_start_server(command=command)
 
         res = ws.execute_process(command, timeout=timeout)
         success = (res.get("exit_code") == 0)
@@ -403,6 +507,8 @@ DISPATCH_TABLE = {
     "update_file": tool_update_file,
     "delete_file": tool_delete_file,
     "run_command": tool_run_command,
+    "start_server": tool_start_server,
+    "stop_server": tool_stop_server,
     "inspect_runtime": tool_inspect_runtime
 }
 
@@ -602,6 +708,9 @@ def classify_failure(exit_code: int, stdout: str = "", stderr: str = "", obj_rea
 
     if "permissionerror" in combined or "access denied" in combined or "permission denied" in combined or "path_security_error" in combined:
         return "permission_error"
+
+    if "no execution observation" in combined or "missing target" in combined or "incomplete plan" in combined:
+        return "plan_error"
 
     if "failed objective requirement validation" in combined or "missing expected text" in combined:
         return "validation_error"

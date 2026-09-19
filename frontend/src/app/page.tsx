@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 interface ToolActivity {
   id: string;
@@ -8,6 +8,47 @@ interface ToolActivity {
   detail?: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'approval_required';
   timestamp: string;
+}
+
+interface ExecutionObs {
+  tool?: string;
+  action?: string;
+  target?: string;
+  filename?: string;
+  command?: string;
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number;
+  success?: boolean;
+  duration?: number;
+  summary?: string;
+  detail?: string;
+  kind?: string;
+}
+
+interface RunData {
+  runId: string;
+  conversationId: string;
+  objective: string;
+  status: 'starting' | 'running' | 'completed' | 'failed' | 'error';
+  planSteps: any[];
+  nodes: Record<string, string>;
+  activityStream: ToolActivity[];
+  relevantFiles: string[];
+  artifacts: any[];
+  observations: ExecutionObs[];
+  validationResult: any;
+  finalResult: any;
+  errorInfo: { node?: string; message: string; error_type?: string } | null;
+  selectedObsIndex: number;
+}
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content?: string;
+  timestamp?: string;
+  runData?: RunData;
 }
 
 export default function FraidayWorkspace() {
@@ -28,18 +69,30 @@ export default function FraidayWorkspace() {
   
   const [inputVal, setInputVal] = useState("");
 
-  // --- PHASE 4.6 RUN STATE & ACTIVITY STREAM ---
-  const [runId, setRunId] = useState<string | null>(null);
-  const [runStatus, setRunStatus] = useState<string>('idle');
-  const [runObjective, setRunObjective] = useState<string>('');
-  const [planSteps, setPlanSteps] = useState<any[]>([]);
-  const [nodes, setNodes] = useState<Record<string, string>>({});
-  const [activityStream, setActivityStream] = useState<ToolActivity[]>([]);
-  const [relevantFiles, setRelevantFiles] = useState<string[]>([]);
-  const [artifacts, setArtifacts] = useState<any[]>([]);
-  const [validationResult, setValidationResult] = useState<any>(null);
-  const [finalResult, setFinalResult] = useState<any>(null);
-  const [errorInfo, setErrorInfo] = useState<{ node?: string; message: string; error_type?: string } | null>(null);
+  // --- CONVERSATION & MULTI-TURN STATE ---
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeRunStatus, setActiveRunStatus] = useState<string>('idle');
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // --- TERMINAL & RUNNER STATE ---
+  const [terminalLogs, setTerminalLogs] = useState<Array<{ command: string; stdout?: string; stderr?: string; exit_code?: number; duration?: number; status?: string }>>([]);
+  const [terminalInput, setTerminalInput] = useState("");
+  const [terminalRunning, setTerminalRunning] = useState(false);
+  const [previewInfo, setPreviewInfo] = useState<{ status: string; url?: string; main_file?: string }>({ status: 'stopped' });
+
+  const fetchPreviewStatus = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/workspace/preview/status");
+      if (res.ok) {
+        const data = await res.json();
+        setPreviewInfo({ status: data.status, url: data.url });
+      }
+    } catch (e) {
+      console.warn("Preview status check failed", e);
+    }
+  };
 
   // Fetch real workspace and runtime information from backend on mount
   useEffect(() => {
@@ -57,207 +110,407 @@ export default function FraidayWorkspace() {
       }
     };
     fetchWorkspace();
+    fetchPreviewStatus();
   }, []);
 
-  const addActivity = (item: Omit<ToolActivity, 'id' | 'timestamp'>) => {
-    const activity: ToolActivity = {
-      ...item,
-      id: Math.random().toString(36).substring(2, 9),
-      timestamp: new Date().toLocaleTimeString()
-    };
-    setActivityStream(prev => [...prev, activity]);
+  const handleRunCommand = async (cmdToRun?: string) => {
+    const cmd = (cmdToRun || terminalInput).trim();
+    if (!cmd || terminalRunning) return;
+    if (!cmdToRun) setTerminalInput("");
+
+    setTerminalRunning(true);
+    const startEntry = { command: cmd, stdout: "Executing process in workspace...", exit_code: undefined };
+    setTerminalLogs(prev => [...prev, startEntry]);
+
+    try {
+      const res = await fetch("http://localhost:8000/api/workspace/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd, timeout: 30, run_id: activeRunId || undefined })
+      });
+      const data = await res.json();
+      setTerminalLogs(prev => prev.map(entry => entry.command === cmd && entry.stdout === "Executing process in workspace..." ? {
+        command: cmd,
+        stdout: data.stdout || (data.success ? "(process output empty)" : ""),
+        stderr: data.stderr || "",
+        exit_code: data.exit_code ?? (data.success ? 0 : 1),
+        duration: data.duration || 0,
+        status: data.success ? "success" : "failed"
+      } : entry));
+    } catch (e: any) {
+      setTerminalLogs(prev => prev.map(entry => entry.command === cmd && entry.stdout === "Executing process in workspace..." ? {
+        command: cmd,
+        stdout: "",
+        stderr: `Execution failed: ${e.message}`,
+        exit_code: 1,
+        duration: 0,
+        status: "failed"
+      } : entry));
+    } finally {
+      setTerminalRunning(false);
+    }
   };
+
+  const startPreviewServer = async (filename: string = "index.html") => {
+    try {
+      const res = await fetch("http://localhost:8000/api/workspace/preview/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, run_id: activeRunId || undefined })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPreviewInfo({ status: "running", url: data.preview_url || data.url, main_file: filename });
+        setTerminalLogs(prev => [...prev, {
+          command: `Starting application preview for ${filename}`,
+          stdout: `Local HTTP server running at ${data.preview_url || data.url}\nApplication available for instant workspace preview.`,
+          exit_code: 0,
+          duration: 0.05,
+          status: "success"
+        }]);
+      }
+    } catch (e: any) {
+      alert("Failed to start preview server: " + e.message);
+    }
+  };
+
+  const stopPreviewServer = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/workspace/preview/stop", {
+        method: "POST"
+      });
+      if (res.ok) {
+        setPreviewInfo({ status: "stopped" });
+        setTerminalLogs(prev => [...prev, {
+          command: "Stopping application preview server",
+          stdout: "Server stopped successfully.",
+          exit_code: 0,
+          duration: 0.01,
+          status: "success"
+        }]);
+      }
+    } catch (e: any) {
+      alert("Failed to stop preview server: " + e.message);
+    }
+  };
+
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [messages]);
 
   const startRun = async () => {
     if (!inputVal.trim()) return;
-    if (runStatus === 'running' || runStatus === 'starting') return;
+    if (activeRunStatus === 'running' || activeRunStatus === 'starting') return;
     
     const objective = inputVal;
     setInputVal("");
-    setRunId(null);
-    setRunStatus('starting');
-    setRunObjective(objective);
-    setPlanSteps([]);
-    setNodes({});
-    setActivityStream([]);
-    setRelevantFiles([]);
-    setArtifacts([]);
-    setValidationResult(null);
-    setFinalResult(null);
-    setErrorInfo(null);
+    setActiveRunStatus('starting');
+
+    const userMsgId = `usr_${Date.now()}`;
+    const userMsg: ChatMessage = {
+      id: userMsgId,
+      role: 'user',
+      content: objective,
+      timestamp: new Date().toLocaleTimeString()
+    };
+
+    setMessages(prev => [...prev, userMsg]);
     
     try {
       const res = await fetch('http://localhost:8000/api/runs/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ objective })
+        body: JSON.stringify({
+          objective,
+          conversation_id: conversationId || undefined
+        })
       });
       
       if (!res.ok) throw new Error('Failed to start run');
       const data = await res.json();
-      setRunId(data.run_id);
-      setRunStatus('running');
       
-      const evtSource = new EventSource(`http://localhost:8000/api/runs/${data.run_id}/events`);
+      const newRunId = data.run_id;
+      const newConvId = data.conversation_id;
+      setConversationId(newConvId);
+      setActiveRunId(newRunId);
+      setActiveRunStatus('running');
+
+      const initialRunData: RunData = {
+        runId: newRunId,
+        conversationId: newConvId,
+        objective,
+        status: 'running',
+        planSteps: [],
+        nodes: {},
+        activityStream: [],
+        relevantFiles: [],
+        artifacts: [],
+        observations: [],
+        validationResult: null,
+        finalResult: null,
+        errorInfo: null,
+        selectedObsIndex: 0
+      };
+
+      const asstMsgId = `asst_${newRunId}`;
+      const asstMsg: ChatMessage = {
+        id: asstMsgId,
+        role: 'assistant',
+        runData: initialRunData
+      };
+
+      setMessages(prev => [...prev, asstMsg]);
+      
+      let isFinished = false;
+      const evtSource = new EventSource(`http://localhost:8000/api/runs/${newRunId}/events`);
       
       evtSource.onmessage = async (event) => {
         try {
           const payload = JSON.parse(event.data);
           const { event: type, node, data: eventData } = payload;
-          
-          if (type === 'context_loaded') {
-            addActivity({
-              type: 'CONTEXT',
-              title: `Workspace Context Initialized: ${eventData.workspace?.name || 'Fraiday'}`,
-              detail: `Root: ${eventData.workspace?.root_path || workspaceRoot} | History turns: ${eventData.conversation_turns || 0}`,
-              status: 'completed'
-            });
-          } else if (type === 'node_started') {
-            setNodes(prev => ({ ...prev, [node]: 'running' }));
-          } else if (type === 'node_completed') {
-            setNodes(prev => ({ ...prev, [node]: 'completed' }));
-          } else if (type === 'agent_thinking') {
-            addActivity({
-              type: (node || 'AGENT').toUpperCase(),
-              title: eventData?.summary || 'Processing...',
-              status: 'completed'
-            });
-          } else if (type === 'plan_created') {
-            setPlanSteps(eventData?.steps || []);
-            addActivity({
-              type: 'PLAN',
-              title: `Action Plan Generated: ${eventData?.steps?.length || 0} operational steps`,
-              status: 'completed'
-            });
-          } else if (type === 'step_started') {
-            setPlanSteps(prev => prev.map(s => s.id === eventData.step_id ? { ...s, status: 'running' } : s));
-          } else if (type === 'step_completed') {
-            setPlanSteps(prev => prev.map(s => s.id === eventData.step_id ? { ...s, status: 'completed' } : s));
-          } else if (type === 'tool_call_started') {
-            addActivity({
-              type: 'ACTION',
-              title: `Invoking Tool: ${eventData.tool?.toUpperCase()}`,
-              detail: eventData.path ? `Target: ${eventData.path}` : (eventData.command ? `Command: ${eventData.command}` : undefined),
-              status: 'running'
-            });
-          } else if (type === 'tool_call_completed') {
-            const isSuccess = eventData.success !== false;
-            const isApproval = eventData.status === 'approval_required';
-            addActivity({
-              type: 'RESULT',
-              title: `Tool Result: ${eventData.tool?.toUpperCase()}`,
-              detail: isApproval ? `APPROVAL REQUIRED: ${eventData.reason}` : (isSuccess ? 'Success' : `Error: ${typeof eventData.error === 'object' && eventData.error !== null ? (eventData.error.message || JSON.stringify(eventData.error)) : (eventData.error || eventData.reason)}`),
-              status: isApproval ? 'approval_required' : (isSuccess ? 'completed' : 'failed')
-            });
-          } else if (type === 'file_created') {
-            setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
-            setArtifacts(prev => [...prev, { path: eventData.path, operation: 'created', type: 'file' }]);
-            addActivity({
-              type: 'CRUD',
-              title: `File Created: ${eventData.path}`,
-              detail: `${eventData.lines || 0} lines written to workspace`,
-              status: 'completed'
-            });
-          } else if (type === 'file_updated') {
-            setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
-            setArtifacts(prev => [...prev, { path: eventData.path, operation: 'updated', type: 'file' }]);
-            addActivity({
-              type: 'CRUD',
-              title: `File Updated: ${eventData.path}`,
-              detail: `Diff: ${eventData.diff || 'Modified'} (${eventData.lines || 0} lines)`,
-              status: 'completed'
-            });
-          } else if (type === 'file_read') {
-            setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
-            addActivity({
-              type: 'CRUD',
-              title: `File Read: ${eventData.path}`,
-              detail: eventData.success ? 'Content retrieved' : 'Not found',
-              status: eventData.success ? 'completed' : 'failed'
-            });
-          } else if (type === 'file_deleted') {
-            setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
-            const isApproval = eventData.status === 'approval_required';
-            addActivity({
-              type: 'CRUD',
-              title: `File Deletion: ${eventData.path}`,
-              detail: isApproval ? 'Paused: Approval Required by Security Policy' : 'File deleted',
-              status: isApproval ? 'approval_required' : 'completed'
-            });
-          } else if (type === 'command_started') {
-            addActivity({
-              type: 'PROCESS',
-              title: `Executing: ${eventData.command}`,
-              status: 'running'
-            });
-          } else if (type === 'command_completed') {
-            const code = eventData.exit_code;
-            addActivity({
-              type: 'PROCESS_RESULT',
-              title: `Command Completed (Exit ${code})`,
-              detail: eventData.stdout ? `stdout: ${eventData.stdout.trim()}` : (eventData.stderr ? `stderr: ${eventData.stderr.trim()}` : undefined),
-              status: code === 0 ? 'completed' : 'failed'
-            });
-          } else if (type === 'validation_result') {
-            setValidationResult(eventData);
-            addActivity({
-              type: 'VALIDATION',
-              title: eventData.valid ? `PASS: ${eventData.reason}` : `FAIL: ${eventData.reason}`,
-              status: eventData.valid ? 'completed' : 'failed'
-            });
-          } else if (type === 'run_completed') {
-            evtSource.close();
-            setRunStatus('completed');
+
+          setMessages(prev => prev.map(msg => {
+            if (msg.id !== asstMsgId || !msg.runData) return msg;
+            const rd = { ...msg.runData };
+            const newStream = [...rd.activityStream];
             
-            try {
-              const finalRes = await fetch(`http://localhost:8000/api/runs/${data.run_id}`);
-              if (finalRes.ok) {
-                const finalData = await finalRes.json();
-                setFinalResult(finalData.state || {});
-                if (finalData.state?.artifacts) setArtifacts(finalData.state.artifacts);
+            const addAct = (item: Omit<ToolActivity, 'id' | 'timestamp'>) => {
+              newStream.push({
+                ...item,
+                id: Math.random().toString(36).substring(2, 9),
+                timestamp: new Date().toLocaleTimeString()
+              });
+            };
+
+            if (type === 'context_loaded') {
+              addAct({
+                type: 'CONTEXT',
+                title: `Workspace Context Initialized: ${eventData.workspace?.name || 'Fraiday'}`,
+                detail: `Root: ${eventData.workspace?.root_path || workspaceRoot} | History turns: ${eventData.conversation_turns || 0}`,
+                status: 'completed'
+              });
+            } else if (type === 'node_started') {
+              rd.nodes = { ...rd.nodes, [node]: 'running' };
+            } else if (type === 'node_completed') {
+              rd.nodes = { ...rd.nodes, [node]: 'completed' };
+            } else if (type === 'agent_thinking') {
+              addAct({
+                type: (node || 'AGENT').toUpperCase(),
+                title: eventData?.summary || 'Processing...',
+                status: 'completed'
+              });
+            } else if (type === 'plan_created') {
+              rd.planSteps = eventData?.steps || [];
+              addAct({
+                type: 'PLAN',
+                title: `Action Plan Generated: ${eventData?.steps?.length || 0} operational steps`,
+                status: 'completed'
+              });
+            } else if (type === 'step_started') {
+              rd.planSteps = rd.planSteps.map(s => s.id === eventData.step_id ? { ...s, status: 'running' } : s);
+            } else if (type === 'step_completed') {
+              rd.planSteps = rd.planSteps.map(s => s.id === eventData.step_id ? { ...s, status: 'completed' } : s);
+            } else if (type === 'tool_call_started') {
+              addAct({
+                type: 'ACTION',
+                title: `Invoking Tool: ${eventData.tool?.toUpperCase()}`,
+                detail: eventData.path ? `Target: ${eventData.path}` : (eventData.command ? `Command: ${eventData.command}` : undefined),
+                status: 'running'
+              });
+            } else if (type === 'tool_call_completed') {
+              const isSuccess = eventData.success !== false;
+              const isApproval = eventData.status === 'approval_required';
+              addAct({
+                type: 'RESULT',
+                title: `Tool Result: ${eventData.tool?.toUpperCase()}`,
+                detail: isApproval ? `APPROVAL REQUIRED: ${eventData.reason}` : (isSuccess ? 'Success' : `Error: ${typeof eventData.error === 'object' && eventData.error !== null ? (eventData.error.message || JSON.stringify(eventData.error)) : (eventData.error || eventData.reason)}`),
+                status: isApproval ? 'approval_required' : (isSuccess ? 'completed' : 'failed')
+              });
+            } else if (type === 'file_created') {
+              rd.relevantFiles = Array.from(new Set([...rd.relevantFiles, eventData.path]));
+              rd.artifacts = [...rd.artifacts, { path: eventData.path, operation: 'created', type: 'file' }];
+              addAct({
+                type: 'CRUD',
+                title: `File Created: ${eventData.path}`,
+                detail: `${eventData.lines || 0} lines written to workspace`,
+                status: 'completed'
+              });
+            } else if (type === 'file_updated') {
+              rd.relevantFiles = Array.from(new Set([...rd.relevantFiles, eventData.path]));
+              rd.artifacts = [...rd.artifacts, { path: eventData.path, operation: 'updated', type: 'file' }];
+              addAct({
+                type: 'CRUD',
+                title: `File Updated: ${eventData.path}`,
+                detail: `Diff: ${eventData.diff || 'Modified'} (${eventData.lines || 0} lines)`,
+                status: 'completed'
+              });
+            } else if (type === 'file_read') {
+              rd.relevantFiles = Array.from(new Set([...rd.relevantFiles, eventData.path]));
+              addAct({
+                type: 'CRUD',
+                title: `File Read: ${eventData.path}`,
+                detail: eventData.success ? 'Content retrieved' : 'Not found',
+                status: eventData.success ? 'completed' : 'failed'
+              });
+            } else if (type === 'file_deleted') {
+              rd.relevantFiles = Array.from(new Set([...rd.relevantFiles, eventData.path]));
+              const isApproval = eventData.status === 'approval_required';
+              addAct({
+                type: 'CRUD',
+                title: `File Deletion: ${eventData.path}`,
+                detail: isApproval ? 'Paused: Approval Required by Security Policy' : 'File deleted',
+                status: isApproval ? 'approval_required' : 'completed'
+              });
+            } else if (type === 'command_started') {
+              addAct({
+                type: 'PROCESS',
+                title: `Executing: ${eventData.command}`,
+                status: 'running'
+              });
+            } else if (type === 'command_completed') {
+              const code = eventData.exit_code;
+              addAct({
+                type: 'PROCESS_RESULT',
+                title: `Command Completed (Exit ${code})`,
+                detail: eventData.stdout ? `stdout: ${eventData.stdout.trim()}` : (eventData.stderr ? `stderr: ${eventData.stderr.trim()}` : undefined),
+                status: code === 0 ? 'completed' : 'failed'
+              });
+              // Append command execution observation directly
+              const cmdObs: ExecutionObs = {
+                tool: 'run_command',
+                action: 'RUN_COMMAND',
+                command: eventData.command,
+                stdout: eventData.stdout || '',
+                stderr: eventData.stderr || '',
+                exit_code: eventData.exit_code ?? 0,
+                duration: eventData.duration || 0,
+                success: code === 0
+              };
+              rd.observations = [...rd.observations, cmdObs];
+            } else if (type === 'server_started' || type === 'preview_started') {
+              const url = eventData?.url || eventData?.preview_url || `http://localhost:${eventData?.port || 5500}`;
+              setPreviewInfo({
+                status: 'running',
+                url: url,
+                main_file: eventData?.target || eventData?.filename || 'ecommerce.html'
+              });
+              addAct({
+                type: 'PROCESS',
+                title: `Application Server Running at ${url}`,
+                detail: `Port ${eventData?.port || 5500} | PID ${eventData?.pid || 'managed'}`,
+                status: 'completed'
+              });
+            } else if (type === 'server_stopped' || type === 'preview_stopped') {
+              setPreviewInfo({ status: 'stopped' });
+              addAct({
+                type: 'PROCESS',
+                title: 'Application Server Stopped',
+                status: 'completed'
+              });
+            } else if (type === 'observation_created') {
+              if (eventData && typeof eventData === 'object') {
+                rd.observations = [...rd.observations, eventData];
               }
-            } catch (e) {
-              console.error(e);
+            } else if (type === 'validation_result') {
+              rd.validationResult = eventData;
+              addAct({
+                type: 'VALIDATION',
+                title: eventData.valid ? `PASS: ${eventData.reason}` : `FAIL: ${eventData.reason}`,
+                status: eventData.valid ? 'completed' : 'failed'
+              });
+            } else if (type === 'run_completed') {
+              isFinished = true;
+              evtSource.close();
+              rd.status = 'completed';
+              setActiveRunStatus('completed');
+              fetch(`http://localhost:8000/api/runs/${newRunId}`)
+                .then(r => r.json())
+                .then(finalData => {
+                  setMessages(mPrev => mPrev.map(m => {
+                    if (m.id !== asstMsgId || !m.runData) return m;
+                    const finalState = finalData.state || {};
+                    const mergedObs = [...(m.runData.observations || []), ...(finalState.observations || [])];
+                    // Deduplicate observations by command/action/summary
+                    const uniqueObs: ExecutionObs[] = [];
+                    const seen = new Set();
+                    for (const o of mergedObs) {
+                      const key = `${o.action || o.tool}_${o.command || o.target}_${o.stdout}_${o.stderr}`;
+                      if (!seen.has(key)) {
+                        seen.add(key);
+                        uniqueObs.push(o);
+                      }
+                    }
+                    return {
+                      ...m,
+                      runData: {
+                        ...m.runData,
+                        status: 'completed',
+                        finalResult: finalState,
+                        artifacts: finalState.artifacts || m.runData.artifacts,
+                        observations: uniqueObs.length > 0 ? uniqueObs : m.runData.observations
+                      }
+                    };
+                  }));
+                })
+                .catch(err => console.error(err));
+            } else if (type === 'run_failed') {
+              isFinished = true;
+              evtSource.close();
+              rd.status = 'failed';
+              setActiveRunStatus('failed');
+              const safeNode = node || eventData?.node || 'execution';
+              const safeMsg = eventData?.message || eventData?.error || 'Run failed unexpectedly.';
+              rd.errorInfo = {
+                node: safeNode,
+                message: safeMsg,
+                error_type: eventData?.error_type || 'ExecutionError'
+              };
+              addAct({
+                type: 'ERROR',
+                title: `${safeNode.toUpperCase()} FAILED: ${safeMsg}`,
+                status: 'failed'
+              });
             }
-          } else if (type === 'run_failed') {
-            evtSource.close();
-            setRunStatus('failed');
-            const safeNode = node || eventData?.node || 'execution';
-            const safeMsg = eventData?.message || eventData?.error || 'Run failed unexpectedly.';
-            setErrorInfo({
-              node: safeNode,
-              message: safeMsg,
-              error_type: eventData?.error_type || 'ExecutionError'
-            });
-            addActivity({
-              type: 'ERROR',
-              title: `${safeNode.toUpperCase()} FAILED: ${safeMsg}`,
-              status: 'failed'
-            });
-          }
+
+            rd.activityStream = newStream;
+            return { ...msg, runData: rd };
+          }));
         } catch (err) {
           console.error("Error parsing SSE frame:", err);
         }
       };
       
       evtSource.onerror = (err) => {
-        console.error("SSE Error:", err);
         evtSource.close();
-        setRunStatus('error');
-        setErrorInfo({
-          node: 'connection',
-          message: 'Lost connection to backend execution stream.',
-          error_type: 'SSEConnectionError'
-        });
+        if (isFinished) {
+          return;
+        }
+        setMessages(prev => prev.map(msg => {
+          if (msg.id !== asstMsgId || !msg.runData) return msg;
+          if (msg.runData.status === 'completed' || msg.runData.status === 'failed') {
+            return msg;
+          }
+          setActiveRunStatus('error');
+          return {
+            ...msg,
+            runData: {
+              ...msg.runData,
+              status: 'error',
+              errorInfo: {
+                node: 'connection',
+                message: 'Lost connection to backend execution stream.',
+                error_type: 'SSEConnectionError'
+              }
+            }
+          };
+        }));
       };
       
     } catch (err: any) {
-      setRunStatus('error');
-      setErrorInfo({
-        node: 'client',
-        message: err.message || 'Error connecting to backend.',
-        error_type: 'NetworkError'
-      });
+      setActiveRunStatus('error');
+      alert(err.message || 'Error connecting to backend.');
     }
   };
 
@@ -281,26 +534,41 @@ export default function FraidayWorkspace() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [inputVal, runStatus]);
+  }, [inputVal, activeRunStatus, conversationId]);
 
   const toggleSwitch = (key: 'web' | 'kb' | 'tools') => {
     setSwitches(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   const createNewConversation = () => {
-    setRunId(null);
-    setRunStatus('idle');
-    setRunObjective('');
-    setPlanSteps([]);
-    setNodes({});
-    setActivityStream([]);
-    setRelevantFiles([]);
-    setArtifacts([]);
-    setValidationResult(null);
-    setFinalResult(null);
-    setErrorInfo(null);
+    setConversationId(null);
+    setMessages([]);
+    setActiveRunId(null);
+    setActiveRunStatus('idle');
+    setInputVal('');
     setView('conversation');
   };
+
+  const setSelectedObsForRun = (asstMsgId: string, index: number) => {
+    setMessages(prev => prev.map(m => {
+      if (m.id !== asstMsgId || !m.runData) return m;
+      return {
+        ...m,
+        runData: {
+          ...m.runData,
+          selectedObsIndex: index
+        }
+      };
+    }));
+  };
+
+  // Helper to extract active relevant files from messages
+  const currentRelevantFiles = Array.from(new Set(
+    messages.flatMap(m => m.runData?.relevantFiles || [])
+  ));
+
+  // Helper to extract active artifacts from messages
+  const currentArtifacts = messages.flatMap(m => m.runData?.artifacts || []);
 
   return (
     <>
@@ -356,7 +624,7 @@ export default function FraidayWorkspace() {
           <div className="overflow-y-auto dark-scroll p-3 flex-1">
             <button className="w-full bg-fra-yellow text-fra-black font-extrabold text-[12px] py-2 px-3 border-2 border-black flex items-center justify-center space-x-2 shadow-brutal hover:bg-fra-yellow-hover transition-all mb-4" onClick={createNewConversation}>
               <span className="text-base leading-none font-black">+</span>
-              <span>New Run Session</span>
+              <span>New Conversation</span>
             </button>
             
             <div className="space-y-1 mb-5 text-[11px] font-mono">
@@ -371,6 +639,9 @@ export default function FraidayWorkspace() {
             <div className="mb-5">
               <div className="flex items-center justify-between text-neutral-400 font-mono text-[10px] uppercase font-bold tracking-wider mb-2 px-1">
                 <span>Workspace Context</span>
+                {conversationId && (
+                  <span className="text-fra-yellow font-bold text-[9px] uppercase font-mono">{conversationId}</span>
+                )}
               </div>
               <div className="space-y-0.5 mb-2">
                 <div className="flex items-center space-x-1.5 text-neutral-300 font-mono text-[11px] px-1 py-1 font-bold">
@@ -380,10 +651,10 @@ export default function FraidayWorkspace() {
                   <div className="text-neutral-400 hover:text-white px-2 py-1 text-[10px] font-mono break-all truncate" title={workspaceRoot}>
                     {workspaceRoot}
                   </div>
-                  {relevantFiles.length > 0 && (
+                  {currentRelevantFiles.length > 0 && (
                     <div className="pt-2 border-t border-neutral-800">
                       <div className="text-[9px] text-neutral-500 font-bold uppercase mb-1">Active Files</div>
-                      {relevantFiles.map(f => (
+                      {currentRelevantFiles.map(f => (
                         <div key={f} className="text-fra-yellow text-[10px] font-mono truncate">
                           &gt; {f}
                         </div>
@@ -397,9 +668,12 @@ export default function FraidayWorkspace() {
             <div className="mb-4 pt-3 border-t border-neutral-800">
               <div className="text-neutral-500 font-mono text-[10px] uppercase font-bold tracking-wider mb-2 px-1">Control Center</div>
               <div className="space-y-0.5 text-[11px] font-mono">
+                <button className="w-full flex items-center space-x-2 text-neutral-300 hover:text-white px-2 py-1.5 hover:bg-neutral-900 rounded cursor-pointer" onClick={() => setView('terminal')}>
+                  <span>[TERM]</span> <span>Integrated Terminal</span>
+                </button>
                 <button className="w-full flex items-center justify-between text-neutral-300 hover:text-white px-2 py-1.5 hover:bg-neutral-900 rounded cursor-pointer" onClick={() => setView('runs')}>
                   <span className="flex items-center gap-2"><span>[RUNS]</span> Active Runs</span>
-                  <span className="bg-neutral-800 text-neutral-300 px-1 rounded text-[10px]">{runId ? '#001' : '#000'}</span>
+                  <span className="bg-neutral-800 text-neutral-300 px-1 rounded text-[10px]">{messages.filter(m => m.role === 'assistant').length} Runs</span>
                 </button>
                 <button className="w-full flex items-center space-x-2 text-neutral-300 hover:text-white px-2 py-1.5 hover:bg-neutral-900 rounded cursor-pointer" onClick={() => setView('agents')}>
                   <span>[AGENT]</span> <span>5 Graph Nodes</span>
@@ -421,6 +695,93 @@ export default function FraidayWorkspace() {
 
         {/* MainContentArea */}
         <main className="flex-1 flex flex-col overflow-hidden bg-fra-cream">
+          {previewInfo.status === 'running' && (
+            <div className="bg-neutral-950 text-white p-2 px-4 border-b-2 border-fra-black flex items-center justify-between font-mono text-xs flex-shrink-0 z-30">
+              <div className="flex items-center space-x-3 truncate">
+                <span className="bg-fra-green text-black font-extrabold px-1.5 py-0.5 text-[9px] uppercase border border-black animate-pulse">● RUNNING</span>
+                <span className="font-bold text-fra-yellow">APPLICATION: {previewInfo.main_file || 'Web Application'}</span>
+                <span className="text-neutral-400 font-normal truncate hidden md:inline">URL: {previewInfo.url}</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                {previewInfo.url && (
+                  <a href={previewInfo.url} target="_blank" rel="noopener noreferrer" className="bg-fra-yellow text-black font-bold px-2.5 py-1 text-[10px] border border-black hover:bg-yellow-400 text-decoration-none">
+                    [ Open Preview ]
+                  </a>
+                )}
+                <button onClick={stopPreviewServer} className="bg-red-500 text-white font-bold px-2.5 py-1 text-[10px] border border-black hover:bg-red-600">
+                  [ Stop ]
+                </button>
+              </div>
+            </div>
+          )}
+
+          {view === 'terminal' && (
+            <div className="flex-1 flex overflow-hidden bg-neutral-950 text-white p-4 flex-col font-mono">
+              <div className="flex items-center justify-between border-b border-neutral-800 pb-3 mb-3 flex-shrink-0">
+                <div className="flex items-center space-x-3">
+                  <h1 className="text-xl font-extrabold text-fra-yellow font-sans tracking-tight">INTEGRATED FRAIDAY TERMINAL</h1>
+                  <span className="bg-neutral-800 text-neutral-300 text-[10px] px-2 py-0.5 font-bold border border-neutral-700">Controlled Execution Sandbox</span>
+                </div>
+                <button className="bg-neutral-800 hover:bg-neutral-700 text-white text-xs px-2.5 py-1 font-bold border border-neutral-600" onClick={() => setTerminalLogs([])}>
+                  Clear Output
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto bg-black border border-neutral-800 p-4 space-y-4 text-xs font-mono mb-3 shadow-inner">
+                {terminalLogs.length === 0 ? (
+                  <div className="text-neutral-500 italic space-y-2">
+                    <p className="text-fra-yellow font-bold">&gt; Fraiday Workspace Terminal / Execution Runner</p>
+                    <p>Enter any CLI command below (e.g. &quot;python hello.py&quot;, &quot;node hello.js&quot;, &quot;javac Hello.java&quot;) or run generated artifacts directly from the Files/Artifacts inspector.</p>
+                    <p className="text-[10px] text-neutral-600">All commands execute within workspace root sandbox with full command policy & safety verification.</p>
+                  </div>
+                ) : (
+                  terminalLogs.map((log, idx) => (
+                    <div key={idx} className="border-l-2 border-fra-yellow pl-3 py-1 bg-neutral-900/50 p-2">
+                      <div className="flex items-center justify-between text-neutral-400 font-bold mb-1">
+                        <span className="text-white">&gt; {log.command}</span>
+                        {log.exit_code !== undefined && (
+                          <span className={log.exit_code === 0 ? "text-fra-green font-bold text-[10px]" : "text-red-400 font-bold text-[10px]"}>
+                            EXIT CODE: {log.exit_code} {log.duration ? `(${log.duration}s)` : ""}
+                          </span>
+                        )}
+                      </div>
+                      {log.stdout && (
+                        <pre className="text-neutral-200 whitespace-pre-wrap font-mono text-[11px] leading-relaxed mb-1">{log.stdout}</pre>
+                      )}
+                      {log.stderr && (
+                        <pre className="text-red-300 whitespace-pre-wrap font-mono text-[11px] leading-relaxed border-t border-neutral-800 pt-1 mt-1">{log.stderr}</pre>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="flex items-center space-x-2 bg-neutral-900 border border-neutral-700 p-2 flex-shrink-0">
+                <span className="text-fra-yellow font-bold text-sm pl-1">&gt;</span>
+                <input
+                  type="text"
+                  className="flex-1 bg-transparent text-white font-mono text-xs focus:outline-none placeholder-neutral-500"
+                  placeholder="Type command to execute in workspace (e.g. python hello.py)..."
+                  value={terminalInput}
+                  onChange={(e) => setTerminalInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleRunCommand();
+                    }
+                  }}
+                />
+                <button
+                  disabled={terminalRunning}
+                  className={`px-4 py-1.5 text-xs font-bold border border-black ${terminalRunning ? 'bg-neutral-600 text-neutral-400 cursor-not-allowed' : 'bg-fra-yellow text-black hover:bg-yellow-400'}`}
+                  onClick={() => handleRunCommand()}
+                >
+                  {terminalRunning ? 'Running...' : 'Run'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {view === 'conversation' && (
             <div className="flex-1 flex overflow-hidden">
               {/* Chat Stream */}
@@ -431,184 +792,254 @@ export default function FraidayWorkspace() {
                     <div className="flex items-center space-x-2 text-[11px] text-neutral-600 font-mono">
                       <span className="font-bold text-neutral-800">Fraiday</span>
                       <span>&gt;</span>
-                      <span className="text-black font-semibold">Active Run</span>
+                      <span className="text-black font-semibold">Active Conversation</span>
                     </div>
-                    {runId && <div className="text-[9px] font-bold bg-neutral-200 border border-neutral-300 px-1.5 py-0.5 font-mono">ID: {runId}</div>}
+                    {conversationId && <div className="text-[9px] font-bold bg-fra-yellow border border-black px-1.5 py-0.5 font-mono">CONV: {conversationId}</div>}
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                  {runObjective && (
-                    <div className="flex items-start justify-end max-w-2xl ml-auto">
-                      <div className="bg-white border-2 border-fra-black p-3 shadow-brutal text-sm text-black font-mono">
-                        {runObjective}
-                      </div>
+                {/* CHRONOLOGICAL CONVERSATION VIEWPORT */}
+                <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-4 space-y-6">
+                  {messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-center p-8 font-mono">
+                      <div className="w-12 h-12 bg-black text-white font-black text-xl flex items-center justify-center mb-3 shadow-brutal">F_</div>
+                      <h2 className="text-lg font-bold text-black font-sans uppercase tracking-tight mb-1">Fraiday Autonomous Execution Agent</h2>
+                      <p className="text-xs text-neutral-600 max-w-md">Submit any high-level objective. Fraiday will research, generate executable plans, invoke real workspace tools, observe subprocess outputs, and validate results autonomously.</p>
                     </div>
-                  )}
-
-                  {(runStatus !== 'idle') && (
-                    <div className="flex items-start max-w-3xl">
-                      <div className="w-8 h-8 rounded bg-black flex-shrink-0 mr-3 flex items-center justify-center text-white font-bold text-sm">F_</div>
-                      <div className="flex-1">
-                        <div className="bg-fra-cream-card border-2 border-fra-black shadow-brutal">
-                          
-                          <div className="flex items-center justify-between p-3 border-b-2 border-fra-black bg-white">
-                            <span className="font-bold text-[11px] uppercase tracking-wider font-mono">Execution Status</span>
-                            {runStatus === 'running' || runStatus === 'starting' ? (
-                                <span className="bg-fra-yellow px-2 py-0.5 text-[10px] font-bold border border-black animate-pulse">[RUNNING]</span>
-                            ) : runStatus === 'completed' ? (
-                                <span className="bg-fra-green text-white px-2 py-0.5 text-[10px] font-bold border border-black">[COMPLETED]</span>
-                            ) : (
-                                <span className="bg-red-500 text-white px-2 py-0.5 text-[10px] font-bold border border-black">[FAILED]</span>
-                            )}
-                          </div>
-
-                          <div className="p-4 space-y-5">
-                            
-                            {/* Execution Graph */}
-                            <div className="border-2 border-fra-black bg-white p-3 shadow-brutal-sm">
-                              <div className="font-bold text-[11px] uppercase tracking-wider mb-3 font-mono">Execution Progress</div>
-                              <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">
-                                {['orchestrator', 'researcher', 'executor', 'validator', 'recovery'].map((node, i, arr) => (
-                                  <React.Fragment key={node}>
-                                    <div className={`flex-1 min-w-[100px] border-2 border-fra-black p-2 shadow-brutal-sm ${nodes[node] === 'running' ? 'bg-fra-yellow' : 'bg-white'}`}>
-                                      <div className={`flex items-center space-x-1 font-bold ${nodes[node] === 'completed' ? 'text-fra-green' : 'text-fra-black'}`}>
-                                        {nodes[node] === 'completed' ? <span>[OK]</span> : nodes[node] === 'running' ? <span className="animate-pulse">[*]</span> : <span>[-]</span>}
-                                        <span className="capitalize">{node}</span>
-                                      </div>
-                                    </div>
-                                    {i < arr.length - 1 && <div className="font-bold text-neutral-400">-&gt;</div>}
-                                  </React.Fragment>
-                                ))}
-                              </div>
+                  ) : (
+                    messages.map((msg) => {
+                      if (msg.role === 'user') {
+                        return (
+                          <div key={msg.id} className="flex items-start justify-end max-w-2xl ml-auto">
+                            <div className="bg-white border-2 border-fra-black p-3 shadow-brutal text-sm text-black font-mono">
+                              <div className="text-[9px] font-bold text-neutral-400 uppercase mb-1">USER INSTRUCTION</div>
+                              {msg.content}
                             </div>
+                          </div>
+                        );
+                      }
 
-                            {/* AI-NATIVE AGENT ACTIVITY STREAM */}
-                            <div className="border-2 border-fra-black bg-white p-3 shadow-brutal-sm">
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="font-bold text-[11px] uppercase tracking-wider font-mono">Agent Activity Stream</span>
-                                <span className="text-[9px] font-mono bg-neutral-200 px-1 border border-neutral-300">{activityStream.length} Events</span>
+                      const rd = msg.runData;
+                      if (!rd) return null;
+
+                      // Extract observations for output inspection.
+                      // Only include genuine command-execution observations (RUN_COMMAND).
+                      // Do NOT include LIST_DIRECTORY/READ_FILE even though they have exit_code defined.
+                      const allObs = rd.observations || [];
+                      const procObs = allObs.filter(o =>
+                        o.action === 'RUN_COMMAND' ||
+                        o.tool === 'run_command' ||
+                        (o.command && o.action !== 'LIST_DIRECTORY' && o.action !== 'READ_FILE' && o.action !== 'CREATE_FILE' && o.action !== 'UPDATE_FILE')
+                      );
+                      const displayObsList = procObs.length > 0 ? procObs : allObs;
+                      const selectedObsIndex = Math.min(rd.selectedObsIndex || 0, Math.max(0, displayObsList.length - 1));
+                      const activeObs = displayObsList[selectedObsIndex] || (allObs.length > 0 ? allObs[0] : null);
+
+                      return (
+                        <div key={msg.id} className="flex items-start max-w-3xl">
+                          <div className="w-8 h-8 rounded bg-black flex-shrink-0 mr-3 flex items-center justify-center text-white font-bold text-sm">F_</div>
+                          <div className="flex-1">
+                            <div className="bg-fra-cream-card border-2 border-fra-black shadow-brutal">
+                              
+                              <div className="flex items-center justify-between p-3 border-b-2 border-fra-black bg-white">
+                                <div className="flex items-center space-x-2">
+                                  <span className="font-bold text-[11px] uppercase tracking-wider font-mono">Execution Status</span>
+                                  <span className="text-[9px] font-mono text-neutral-500">ID: {rd.runId}</span>
+                                </div>
+                                {rd.status === 'running' || rd.status === 'starting' ? (
+                                    <span className="bg-fra-yellow px-2 py-0.5 text-[10px] font-bold border border-black animate-pulse">[RUNNING]</span>
+                                ) : rd.status === 'completed' ? (
+                                    <span className="bg-fra-green text-white px-2 py-0.5 text-[10px] font-bold border border-black">[COMPLETED]</span>
+                                ) : (
+                                    <span className="bg-red-500 text-white px-2 py-0.5 text-[10px] font-bold border border-black">[FAILED]</span>
+                                )}
                               </div>
-                              {activityStream.length === 0 ? (
-                                <div className="text-xs text-neutral-500 italic font-mono">Waiting for activity...</div>
-                              ) : (
-                                <div className="space-y-2 font-mono text-xs max-h-64 overflow-y-auto pr-1">
-                                  {activityStream.map((act) => (
-                                    <div key={act.id} className="border-l-2 border-fra-black pl-2 py-0.5">
-                                      <div className="flex items-center justify-between">
-                                        <div className="flex items-center space-x-2">
-                                          <span className={`text-[9px] font-black px-1 border border-black ${
-                                            act.status === 'approval_required' ? 'bg-orange-400 text-black' :
-                                            act.status === 'completed' ? 'bg-fra-green text-white' :
-                                            act.status === 'failed' ? 'bg-red-500 text-white' :
-                                            'bg-fra-yellow text-black animate-pulse'
-                                          }`}>
-                                            {act.type}
-                                          </span>
-                                          <span className="font-bold text-neutral-900">{act.title}</span>
+
+                              <div className="p-4 space-y-5">
+                                
+                                {/* Execution Graph Progress */}
+                                <div className="border-2 border-fra-black bg-white p-3 shadow-brutal-sm">
+                                  <div className="font-bold text-[11px] uppercase tracking-wider mb-3 font-mono">Execution Progress</div>
+                                  <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">
+                                    {['orchestrator', 'researcher', 'executor', 'validator', 'recovery'].map((node, i, arr) => (
+                                      <React.Fragment key={node}>
+                                        <div className={`flex-1 min-w-[100px] border-2 border-fra-black p-2 shadow-brutal-sm ${rd.nodes[node] === 'running' ? 'bg-fra-yellow' : 'bg-white'}`}>
+                                          <div className={`flex items-center space-x-1 font-bold ${rd.nodes[node] === 'completed' ? 'text-fra-green' : 'text-fra-black'}`}>
+                                            {rd.nodes[node] === 'completed' ? <span>[OK]</span> : rd.nodes[node] === 'running' ? <span className="animate-pulse">[*]</span> : <span>[-]</span>}
+                                            <span className="capitalize">{node}</span>
+                                          </div>
                                         </div>
-                                        <span className="text-[9px] text-neutral-400">{act.timestamp}</span>
+                                        {i < arr.length - 1 && <div className="font-bold text-neutral-400">-&gt;</div>}
+                                      </React.Fragment>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                {/* AGENT ACTIVITY STREAM */}
+                                <div className="border-2 border-fra-black bg-white p-3 shadow-brutal-sm">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <span className="font-bold text-[11px] uppercase tracking-wider font-mono">Agent Activity Stream</span>
+                                    <span className="text-[9px] font-mono bg-neutral-200 px-1 border border-neutral-300">{rd.activityStream.length} Events</span>
+                                  </div>
+                                  {rd.activityStream.length === 0 ? (
+                                    <div className="text-xs text-neutral-500 italic font-mono">Waiting for activity...</div>
+                                  ) : (
+                                    <div className="space-y-2 font-mono text-xs max-h-64 overflow-y-auto pr-1">
+                                      {rd.activityStream.map((act) => (
+                                        <div key={act.id} className="border-l-2 border-fra-black pl-2 py-0.5">
+                                          <div className="flex items-center justify-between">
+                                            <div className="flex items-center space-x-2">
+                                              <span className={`text-[9px] font-black px-1 border border-black ${
+                                                act.status === 'approval_required' ? 'bg-orange-400 text-black' :
+                                                act.status === 'completed' ? 'bg-fra-green text-white' :
+                                                act.status === 'failed' ? 'bg-red-500 text-white' :
+                                                'bg-fra-yellow text-black animate-pulse'
+                                              }`}>
+                                                {act.type}
+                                              </span>
+                                              <span className="font-bold text-neutral-900">{act.title}</span>
+                                            </div>
+                                            <span className="text-[9px] text-neutral-400">{act.timestamp}</span>
+                                          </div>
+                                          {act.detail && (
+                                            <div className="text-[10px] text-neutral-600 pl-1 mt-0.5 bg-neutral-50 p-1 border border-neutral-200 break-all">
+                                              {act.detail}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* WORK PLAN */}
+                                <div className="border-2 border-fra-black bg-white p-3 shadow-brutal-sm">
+                                  <div className="font-bold text-[11px] uppercase tracking-wider mb-3 font-mono">Work Plan</div>
+                                  {rd.planSteps.length === 0 ? (
+                                    <div className="text-xs text-neutral-500 italic font-mono">Waiting for orchestrator...</div>
+                                  ) : (
+                                    <div className="space-y-2.5 font-mono text-[11px]">
+                                      {rd.planSteps.map(step => (
+                                        <div key={step.id} className="border-b border-neutral-100 pb-1.5 flex items-start justify-between">
+                                          <div className="flex items-start space-x-2">
+                                            <span className={`font-bold ${
+                                              step.status === 'completed' ? 'text-fra-green' :
+                                              step.status === 'running' ? 'text-fra-amber animate-spin' :
+                                              'text-neutral-400'
+                                            }`}>
+                                              {step.status === 'completed' ? '[x]' : step.status === 'running' ? '[*]' : '[-]'}
+                                            </span>
+                                            <div>
+                                              <div className={`font-bold ${step.status === 'pending' ? 'text-neutral-500' : 'text-black'}`}>
+                                                {step.description}
+                                              </div>
+                                              {step.action && <div className="text-[9px] text-neutral-400 uppercase tracking-wider">Action: {step.action}</div>}
+                                            </div>
+                                          </div>
+                                          <span className="text-[9px] text-neutral-500 uppercase font-mono px-1 border border-neutral-300">{step.agent}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Validation Result */}
+                                {rd.validationResult && (
+                                  <div className={`border-2 border-fra-black p-3 shadow-brutal-sm ${
+                                    rd.validationResult.status === 'approval_required' ? 'bg-orange-50 border-orange-600' :
+                                    rd.validationResult.valid ? 'bg-green-50' : 'bg-red-50'
+                                  }`}>
+                                    <div className="font-bold text-[11px] uppercase tracking-wider mb-1 font-mono">Validation Result</div>
+                                    <div className={`text-xs font-mono font-bold ${
+                                      rd.validationResult.status === 'approval_required' ? 'text-orange-700' :
+                                      rd.validationResult.valid ? 'text-fra-green' : 'text-red-600'
+                                    }`}>
+                                      {rd.validationResult.status === 'approval_required' ? 'APPROVAL REQUIRED: ' : (rd.validationResult.valid ? 'PASS: ' : 'FAIL: ')}
+                                      {rd.validationResult.reason}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Error Details */}
+                                {rd.errorInfo && (
+                                  <div className="border-2 border-fra-black bg-red-100 text-red-900 p-3 shadow-brutal-sm font-mono">
+                                    <div className="font-black text-xs uppercase tracking-wider text-red-700">
+                                      {(rd.errorInfo.node || "RUNNER").toUpperCase()} FAILED
+                                    </div>
+                                    <div className="text-xs font-bold mt-1 text-black">
+                                      {rd.errorInfo.message}
+                                    </div>
+                                    {rd.errorInfo.error_type && (
+                                      <div className="text-[9px] text-neutral-600 mt-1 uppercase">
+                                        Error Type: {rd.errorInfo.error_type}
                                       </div>
-                                      {act.detail && (
-                                        <div className="text-[10px] text-neutral-600 pl-1 mt-0.5 bg-neutral-50 p-1 border border-neutral-200 break-all">
-                                          {act.detail}
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* WORKSPACE EXECUTION OUTPUT INSPECTION PANEL */}
+                                {activeObs ? (
+                                  <div className="border-2 border-fra-black bg-black text-white p-3 shadow-brutal text-xs font-mono overflow-x-auto">
+                                    <div className="flex items-center justify-between border-b border-neutral-800 pb-2 mb-2">
+                                      <div className="font-bold text-fra-yellow uppercase tracking-wider text-[10px]">
+                                        {procObs.length > 0 ? "WORKSPACE EXECUTION STDOUT" : "WORKSPACE OBSERVATION"} [{activeObs.command ? activeObs.command : (activeObs.action || activeObs.tool || "output")}]
+                                      </div>
+                                      {displayObsList.length > 1 && (
+                                        <div className="flex items-center space-x-1">
+                                          <span className="text-[9px] text-neutral-400 font-bold uppercase mr-1">Outputs:</span>
+                                          {displayObsList.map((obsItem, oIdx) => (
+                                            <button
+                                              key={oIdx}
+                                              className={`px-1.5 py-0.5 text-[9px] font-bold border ${
+                                                selectedObsIndex === oIdx ? 'bg-fra-yellow text-black border-black' : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                                              }`}
+                                              onClick={() => setSelectedObsForRun(msg.id, oIdx)}
+                                            >
+                                              #{oIdx + 1} {obsItem.command ? obsItem.command.split(' ')[0] : (obsItem.action || obsItem.tool || 'obs')}
+                                            </button>
+                                          ))}
                                         </div>
                                       )}
                                     </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
 
-                            {/* AI-NATIVE WORK PLAN */}
-                            <div className="border-2 border-fra-black bg-white p-3 shadow-brutal-sm">
-                              <div className="font-bold text-[11px] uppercase tracking-wider mb-3 font-mono">Work Plan</div>
-                              {planSteps.length === 0 ? (
-                                <div className="text-xs text-neutral-500 italic font-mono">Waiting for orchestrator...</div>
-                              ) : (
-                                <div className="space-y-2.5 font-mono text-[11px]">
-                                  {planSteps.map(step => (
-                                    <div key={step.id} className="border-b border-neutral-100 pb-1.5 flex items-start justify-between">
-                                      <div className="flex items-start space-x-2">
-                                        <span className={`font-bold ${
-                                          step.status === 'completed' ? 'text-fra-green' :
-                                          step.status === 'running' ? 'text-fra-amber animate-spin' :
-                                          'text-neutral-400'
-                                        }`}>
-                                          {step.status === 'completed' ? '[x]' : step.status === 'running' ? '[*]' : '[-]'}
-                                        </span>
-                                        <div>
-                                          <div className={`font-bold ${step.status === 'pending' ? 'text-neutral-500' : 'text-black'}`}>
-                                            {step.description}
-                                          </div>
-                                          {step.action && <div className="text-[9px] text-neutral-400 uppercase tracking-wider">Action: {step.action}</div>}
-                                        </div>
+                                    {/* Stdout display — real subprocess output takes priority */}
+                                    <pre className="mb-3 text-neutral-200 whitespace-pre-wrap font-mono text-[11px] leading-relaxed">
+                                      {activeObs.stdout && activeObs.stdout.trim()
+                                        ? activeObs.stdout
+                                        : activeObs.action === 'LIST_DIRECTORY' && (activeObs as any).entries?.length > 0
+                                          ? `Directory listing (${(activeObs as any).entries.length} items):\n` + (activeObs as any).entries.map((e: string) => `  ${e}`).join('\n')
+                                          : activeObs.action === 'READ_FILE' && activeObs.summary
+                                            ? activeObs.summary
+                                            : activeObs.action === 'CREATE_FILE' || activeObs.action === 'UPDATE_FILE'
+                                              ? activeObs.summary || 'File written successfully.'
+                                              : activeObs.summary || activeObs.detail || '(no output captured)'}
+                                    </pre>
+                                    
+                                    {/* Stderr display if present */}
+                                    {activeObs.stderr && activeObs.stderr.trim() !== '' && (
+                                      <div className="mb-3 border-t border-neutral-800 pt-2">
+                                        <div className="font-bold text-red-400 uppercase tracking-wider mb-1 text-[10px]">STDERR</div>
+                                        <pre className="text-red-200 whitespace-pre-wrap font-mono text-[11px] leading-relaxed">{activeObs.stderr}</pre>
                                       </div>
-                                      <span className="text-[9px] text-neutral-500 uppercase font-mono px-1 border border-neutral-300">{step.agent}</span>
+                                    )}
+
+                                    <div className="font-bold text-neutral-400 text-[10px] uppercase border-t border-neutral-800 pt-1.5 flex justify-between">
+                                      <span>EXIT CODE: {activeObs.exit_code ?? 0}</span>
+                                      <span>DURATION: {activeObs.duration || 0}s</span>
                                     </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Validation Result */}
-                            {validationResult && (
-                              <div className={`border-2 border-fra-black p-3 shadow-brutal-sm ${
-                                validationResult.status === 'approval_required' ? 'bg-orange-50 border-orange-600' :
-                                validationResult.valid ? 'bg-green-50' : 'bg-red-50'
-                              }`}>
-                                <div className="font-bold text-[11px] uppercase tracking-wider mb-1 font-mono">Validation Result</div>
-                                <div className={`text-xs font-mono font-bold ${
-                                  validationResult.status === 'approval_required' ? 'text-orange-700' :
-                                  validationResult.valid ? 'text-fra-green' : 'text-red-600'
-                                }`}>
-                                  {validationResult.status === 'approval_required' ? 'APPROVAL REQUIRED: ' : (validationResult.valid ? 'PASS: ' : 'FAIL: ')}
-                                  {validationResult.reason}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Error Details */}
-                            {errorInfo && (
-                              <div className="border-2 border-fra-black bg-red-100 text-red-900 p-3 shadow-brutal-sm font-mono">
-                                <div className="font-black text-xs uppercase tracking-wider text-red-700">
-                                  {(errorInfo.node || "RUNNER").toUpperCase()} FAILED
-                                </div>
-                                <div className="text-xs font-bold mt-1 text-black">
-                                  {errorInfo.message}
-                                </div>
-                                {errorInfo.error_type && (
-                                  <div className="text-[9px] text-neutral-600 mt-1 uppercase">
-                                    Error Type: {errorInfo.error_type}
+                                  </div>
+                                ) : (
+                                  <div className="border-2 border-fra-black bg-neutral-900 text-neutral-400 p-3 shadow-brutal text-xs font-mono italic">
+                                    No command outputs or observations recorded yet.
                                   </div>
                                 )}
-                              </div>
-                            )}
 
-                            {/* Final Output */}
-                            {finalResult?.observations?.[0] && (
-                              <div className="border-2 border-fra-black bg-black text-white p-3 shadow-brutal text-xs font-mono overflow-x-auto">
-                                <div className="font-bold text-fra-yellow uppercase tracking-wider mb-1 text-[10px]">
-                                  WORKSPACE EXECUTION STDOUT [{finalResult.observations[0].filename || finalResult.observations[0].tool || "output"}]
-                                </div>
-                                <pre className="mb-3 text-neutral-200">{finalResult.observations[0].stdout || '(empty)'}</pre>
-                                
-                                {finalResult.observations[0].stderr && (
-                                  <>
-                                    <div className="font-bold text-red-400 uppercase tracking-wider mb-1 text-[10px]">STDERR</div>
-                                    <pre className="mb-3 text-red-200">{finalResult.observations[0].stderr}</pre>
-                                  </>
-                                )}
-                                <div className="font-bold text-neutral-400 text-[10px] uppercase">
-                                  EXIT CODE: {finalResult.observations[0].exit_code} | DURATION: {finalResult.observations[0].duration || 0}s
-                                </div>
                               </div>
-                            )}
-
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </div>
+                      );
+                    })
                   )}
                 </div>
 
@@ -635,11 +1066,11 @@ export default function FraidayWorkspace() {
                       <div className="flex items-center space-x-2">
                         <span className="text-[10px] text-neutral-500 font-mono hidden sm:inline">Ctrl + Enter</span>
                         <button 
-                          disabled={runStatus === 'starting' || runStatus === 'running'}
-                          className={`px-4 py-1.5 text-xs font-bold border-2 border-black flex items-center space-x-1.5 shadow-brutal-sm ${runStatus === 'starting' || runStatus === 'running' ? 'bg-neutral-400 text-neutral-600 cursor-not-allowed' : 'bg-black text-white hover:bg-neutral-800'}`}
+                          disabled={activeRunStatus === 'starting' || activeRunStatus === 'running'}
+                          className={`px-4 py-1.5 text-xs font-bold border-2 border-black flex items-center space-x-1.5 shadow-brutal-sm ${activeRunStatus === 'starting' || activeRunStatus === 'running' ? 'bg-neutral-400 text-neutral-600 cursor-not-allowed' : 'bg-black text-white hover:bg-neutral-800'}`}
                           onClick={startRun}
                         >
-                          <span>{runStatus === 'starting' || runStatus === 'running' ? 'Running...' : 'Send'}</span><span>-&gt;</span>
+                          <span>{activeRunStatus === 'starting' || activeRunStatus === 'running' ? 'Running...' : 'Send'}</span><span>-&gt;</span>
                         </button>
                       </div>
                     </div>
@@ -687,17 +1118,21 @@ export default function FraidayWorkspace() {
                   <button className="py-2.5 bg-fra-yellow border-r-2 border-fra-black font-extrabold text-black">Context</button>
                   <button className="py-2.5 bg-neutral-200 border-r-2 border-fra-black hover:bg-fra-yellow" onClick={() => setView('agents')}>Agents</button>
                   <button className="py-2.5 bg-neutral-200 border-r-2 border-fra-black hover:bg-fra-yellow" onClick={() => alert('Files in workspace: ' + workspaceRoot)}>Files</button>
-                  <button className="py-2.5 bg-neutral-200 hover:bg-fra-yellow" onClick={() => alert('Artifacts: ' + (artifacts.length || 0))}>Artifacts</button>
+                  <button className="py-2.5 bg-neutral-200 hover:bg-fra-yellow" onClick={() => alert('Artifacts: ' + (currentArtifacts.length || 0))}>Artifacts</button>
                 </div>
                 <div className="p-4 space-y-5 flex-1">
                   
-                  {/* CONTEXT PANEL (STEP 10) */}
+                  {/* CONTEXT PANEL */}
                   <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
                     <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN CONTEXT</div>
                     <div className="space-y-1.5 text-[10px]">
                       <div className="flex justify-between border-b border-neutral-200 pb-1">
                         <span className="text-neutral-600">WORKSPACE</span>
                         <span className="font-bold text-black">{workspace}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-neutral-200 pb-1">
+                        <span className="text-neutral-600">CONVERSATION ID</span>
+                        <span className="font-bold text-fra-yellow">{conversationId || 'New Session'}</span>
                       </div>
                       <div className="flex justify-between border-b border-neutral-200 pb-1">
                         <span className="text-neutral-600">ROOT DIRECTORY</span>
@@ -709,12 +1144,12 @@ export default function FraidayWorkspace() {
                       </div>
                       <div className="pt-1">
                         <span className="text-neutral-600 block mb-1">RELEVANT FILES:</span>
-                        {relevantFiles.length === 0 ? (
+                        {currentRelevantFiles.length === 0 ? (
                           <span className="text-neutral-400 italic">None accessed yet</span>
                         ) : (
                           <div className="space-y-0.5">
-                            {relevantFiles.map(f => (
-                              <div key={f} className="text-black font-bold bg-white px-1 border border-neutral-300">
+                            {currentRelevantFiles.map(f => (
+                              <div key={f} className="text-black font-bold bg-white px-1 border border-neutral-300 truncate">
                                 {f}
                               </div>
                             ))}
@@ -724,19 +1159,63 @@ export default function FraidayWorkspace() {
                     </div>
                   </div>
 
-                  {/* ARTIFACTS PANEL (STEP 15) */}
+                  {/* ARTIFACTS PANEL */}
                   <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
                     <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN ARTIFACTS</div>
-                    {artifacts.length === 0 ? (
+                    {currentArtifacts.length === 0 ? (
                       <div className="text-[10px] text-neutral-400 italic">No artifacts generated yet.</div>
                     ) : (
                       <div className="space-y-1.5 text-[10px]">
-                        {artifacts.map((art, idx) => (
-                          <div key={idx} className="flex items-center justify-between border border-black bg-white p-1.5">
-                            <span className="font-bold">{art.path}</span>
-                            <span className="text-[9px] uppercase font-bold bg-fra-yellow px-1 border border-black">{art.operation}</span>
-                          </div>
-                        ))}
+                        {currentArtifacts.map((art, idx) => {
+                          const p = art.path || "";
+                          const isHtml = p.endsWith(".html") || p.endsWith(".htm");
+                          const isPy = p.endsWith(".py");
+                          const isJs = p.endsWith(".js");
+                          const isJava = p.endsWith(".java");
+
+                          return (
+                            <div key={idx} className="flex flex-col gap-1 border border-black bg-white p-2">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold truncate max-w-[140px]">{p}</span>
+                                <span className="text-[8px] uppercase font-bold bg-fra-yellow px-1 border border-black">{art.operation}</span>
+                              </div>
+                              <div className="flex items-center justify-end gap-1 pt-1 border-t border-neutral-100">
+                                {isHtml && (
+                                  <button
+                                    className="bg-fra-yellow text-black font-bold px-2 py-0.5 text-[9px] border border-black hover:bg-yellow-400"
+                                    onClick={() => startPreviewServer(p)}
+                                  >
+                                    [ Run Application / Preview ]
+                                  </button>
+                                )}
+                                {isPy && (
+                                  <button
+                                    className="bg-black text-white font-bold px-2 py-0.5 text-[9px] border border-black hover:bg-neutral-800"
+                                    onClick={() => handleRunCommand(`python ${p}`)}
+                                  >
+                                    [ Run Python ]
+                                  </button>
+                                )}
+                                {isJs && (
+                                  <button
+                                    className="bg-black text-white font-bold px-2 py-0.5 text-[9px] border border-black hover:bg-neutral-800"
+                                    onClick={() => handleRunCommand(`node ${p}`)}
+                                  >
+                                    [ Run JS ]
+                                  </button>
+                                )}
+                                {isJava && (
+                                  <button
+                                    className="bg-black text-white font-bold px-2 py-0.5 text-[9px] border border-black hover:bg-neutral-800"
+                                    onClick={() => handleRunCommand(`javac ${p} && java ${p.replace('.java', '')}`)}
+                                  >
+                                    [ Run Java ]
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -786,11 +1265,15 @@ export default function FraidayWorkspace() {
             <div className="flex-1 flex overflow-hidden bg-fra-cream p-4 flex-col font-mono">
               <h1 className="text-3xl font-extrabold font-sans mb-4">RUNS</h1>
               <div className="border-2 border-fra-black bg-white p-4 shadow-brutal mb-4">
-                <div className="text-xs text-neutral-600 mb-2 font-bold uppercase">Active Workspace Runs</div>
-                {runId ? (
-                  <div className="p-2 border border-black bg-fra-yellow flex justify-between items-center text-xs">
-                    <span className="font-bold">ID: {runId} | {runObjective}</span>
-                    <span className="font-black bg-black text-white px-2 py-0.5">{runStatus.toUpperCase()}</span>
+                <div className="text-xs text-neutral-600 mb-2 font-bold uppercase">Active Conversation Runs ({messages.filter(m => m.role === 'assistant').length})</div>
+                {messages.filter(m => m.role === 'assistant').length > 0 ? (
+                  <div className="space-y-2">
+                    {messages.filter(m => m.role === 'assistant').map((m, idx) => (
+                      <div key={m.id} className="p-2 border border-black bg-fra-yellow flex justify-between items-center text-xs">
+                        <span className="font-bold"># {idx + 1} | Run: {m.runData?.runId} | {m.runData?.objective}</span>
+                        <span className="font-black bg-black text-white px-2 py-0.5">{m.runData?.status.toUpperCase()}</span>
+                      </div>
+                    ))}
                   </div>
                 ) : (
                   <div className="text-neutral-500 text-xs italic">No runs active in current session. Enter an instruction in the Workspace to begin.</div>

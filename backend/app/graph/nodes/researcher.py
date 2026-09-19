@@ -124,7 +124,11 @@ Do NOT include markdown or chain-of-thought."""
             }
 
     # EVALUATE RELEVANCE & SAVE TO PERSISTENT KNOWLEDGE STORE
-    finding_text = finding_data.get("finding", "")
+    finding_text = ""
+    if isinstance(finding_data, dict):
+        finding_text = finding_data.get("finding") or finding_data.get("findings") or finding_data.get("solution") or finding_data.get("relevance") or json.dumps(finding_data)
+        finding_data["finding"] = finding_text
+
     if finding_text:
         finding_data["status"] = "accepted"
         kb.save_finding(finding_data)

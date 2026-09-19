@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.api.runs import router as runs_router
+from app.api.runs import router as runs_router, conversations_router
 from app.api.workspace import router as workspace_router
 from app.llm.router import call_groq
 
@@ -21,6 +21,7 @@ app.add_middleware(
 )
 
 app.include_router(runs_router, prefix="/api")
+app.include_router(conversations_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 
 @app.get("/health")

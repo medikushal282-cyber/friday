@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KICKLAB — Premium Sneaker Destination</title>
+    <link rel="stylesheet" href="ecommerce.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container header-content">
+            <div class="logo">KICKLAB<span>.</span></div>
+            <nav class="nav-menu">
+                <a href="#hero" class="active">Home</a>
+                <a href="#products">Products</a>
+                <a href="#categories">Categories</a>
+                <a href="#footer">Contact</a>
+            </nav>
+            <div class="header-actions">
+                <button id="cart-btn" class="cart-trigger">
+                    <span>🛒 Cart</span>
+                    <span id="cart-count" class="badge">0</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <section id="hero" class="hero">
+        <div class="container hero-content">
+            <div class="hero-text">
+                <span class="sub-tag">SPRING 2026 COLLECTION</span>
+                <h1>ELEVATE YOUR SNEAKER GAME</h1>
+                <p>Discover rare releases, iconic silhouettes, and high-performance footwear curated specifically for true collectors.</p>
+                <div class="hero-btns">
+                    <a href="#products" class="btn btn-primary">Shop Collection</a>
+                    <a href="#categories" class="btn btn-secondary">Explore Categories</a>
+                </div>
+            </div>
+            <div class="hero-badge-box">
+                <div class="hero-card">
+                    <span class="hero-icon">🔥</span>
+                    <h3>KICKLAB Exclusive</h3>
+                    <p>Verified Authentic & Delivered Fast</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="products" class="products-section container">
+        <div class="section-header">
+            <div>
+                <h2>Featured Products</h2>
+                <p>Handpicked premium sneakers available today</p>
+            </div>
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search sneakers or category...">
+            </div>
+        </div>
+
+        <div class="category-filters" id="categories">
+            <button class="category-btn active" data-category="All">All Items</button>
+            <button class="category-btn" data-category="Basketball">Basketball</button>
+            <button class="category-btn" data-category="Running">Running</button>
+            <button class="category-btn" data-category="Casual">Casual</button>
+        </div>
+
+        <div id="product-grid" class="product-grid">
+            <div class="product-card">
+                <span class="product-badge">Hot</span>
+                <div class="product-img-box">👟</div>
+                <div class="product-info">
+                    <span class="product-cat">Basketball</span>
+                    <h3 class="product-title">Air Jordan 1 High OG</h3>
+                    <div class="product-footer">
+                        <span class="product-price">$180.00</span>
+                        <button class="add-to-cart-btn" data-id="1">Add to Cart</button>
+                    </div>
+                </div>
+            </div>
+            <div class="product-card">
+                <span class="product-badge">Popular</span>
+                <div class="product-img-box">👟</div>
+                <div class="product-info">
+                    <span class="product-cat">Casual</span>
+                    <h3 class="product-title">Nike Dunk Low Retro</h3>
+                    <div class="product-footer">
+                        <span class="product-price">$115.00</span>
+                        <button class="add-to-cart-btn" data-id="2">Add to Cart</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Cart Drawer -->
+    <div id="cart-drawer" class="cart-drawer">
+        <div class="cart-drawer-header">
+            <h3>Your Shopping Cart</h3>
+            <button id="close-cart" class="close-btn">&times;</button>
+        </div>
+        <div id="cart-items" class="cart-items-body">
+            <!-- Cart items dynamically rendered -->
+        </div>
+        <div class="cart-drawer-footer">
+            <div class="subtotal-row">
+                <span>Subtotal:</span>
+                <span id="cart-subtotal">$0.00</span>
+            </div>
+            <button class="btn btn-primary btn-block">Proceed to Checkout</button>
+        </div>
+    </div>
+
+    <footer id="footer" class="footer">
+        <div class="container footer-content">
+            <div>
+                <div class="logo">KICKLAB<span>.</span></div>
+                <p>Premium footwear marketplace powered by Fraiday Autonomous AI.</p>
+            </div>
+            <div class="footer-links">
+                <h4>Customer Care</h4>
+                <a href="#">Shipping & Returns</a>
+                <a href="#">Authenticity Guarantee</a>
+                <a href="#">Order Tracking</a>
+            </div>
+            <div class="footer-links">
+                <h4>Company</h4>
+                <a href="#">About Us</a>
+                <a href="#">Careers</a>
+                <a href="#">Privacy Policy</a>
+            </div>
+        </div>
+        <div class="footer-bottom text-center">
+            <p>&copy; 2026 KICKLAB. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="ecommerce.js"></script>
+</body>
+</html>

@@ -147,11 +147,13 @@ async def execute_run_task(
             await emit(run_id, "run_completed", data={"final_status": "completed"})
 
         if on_complete:
+            all_obs = state.get("observations", [])
+            sorted_obs = sorted(all_obs, key=lambda o: (1 if (o.get("stdout") and str(o.get("stdout")).strip()) else 0, 1 if o.get("action") == "RUN_COMMAND" else 0), reverse=True)
             on_complete({
                 "run_id": run_id,
                 "objective": objective,
                 "artifacts": state.get("artifacts", []),
-                "observations": state.get("observations", [])[-2:] if state.get("observations") else [],
+                "observations": sorted_obs[:3] if sorted_obs else [],
                 "validation": state.get("validation_results", [])[-1:] if state.get("validation_results") else []
             })
         

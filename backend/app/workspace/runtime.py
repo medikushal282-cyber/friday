@@ -127,10 +127,40 @@ def detect_cli_tool(name: str) -> Dict[str, Any]:
             "executable": tool_path
         }
 
+def detect_java() -> Dict[str, Any]:
+    javac_path = shutil.which("javac")
+    java_path = shutil.which("java")
+    if not javac_path and not java_path:
+        return {
+            "available": False,
+            "version": None,
+            "executable": None,
+            "compiler": None
+        }
+    version_str = None
+    target_bin = javac_path or java_path
+    try:
+        res = subprocess.run(
+            [target_bin, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        version_str = res.stdout.strip() or res.stderr.strip()
+    except Exception:
+        pass
+    return {
+        "available": bool(javac_path or java_path),
+        "version": version_str,
+        "executable": java_path,
+        "compiler": javac_path
+    }
+
 def detect_all_runtimes(workspace_root: str) -> Dict[str, Any]:
     return {
         "python": detect_python(workspace_root),
         "node": detect_cli_tool("node"),
+        "java": detect_java(),
         "npm": detect_cli_tool("npm"),
         "pnpm": detect_cli_tool("pnpm"),
         "git": detect_cli_tool("git")

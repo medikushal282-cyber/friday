@@ -5,6 +5,7 @@ import asyncio
 from app.events import emit
 from app.workspace.manager import get_workspace_manager
 from app.workspace.tools import execute_action, classify_failure, validate_python_source
+from app.graph.controller import MAX_REPLANS, MAX_RECOVERY_ATTEMPTS
 
 async def recovery_node(state: dict) -> dict:
     run_id = state["run_id"]
@@ -21,18 +22,36 @@ async def recovery_node(state: dict) -> dict:
         state["current_step"] = "end"
         return state
 
-    # 2. Enforce Bounded Retry Limit (Max 2 Attempts)
+    val_reason = last_validation.get("reason", "")
+    replan_count = state.get("replan_count", 0)
     recovery_attempts = state.get("recovery_attempts", 0)
-    if recovery_attempts >= 2:
-        await emit(run_id, "agent_thinking", "recovery", {"summary": "Maximum recovery attempts (2) reached. Run failed validation."})
-        state["status"] = "failed"
-        state["current_step"] = "end"
-        return state
+
+    # 2. Check for Plan Defect / Plan Error
+    is_plan_error = "no execution observation" in val_reason.lower() or "missing target" in val_reason.lower()
+    if is_plan_error or state.get("current_step") == "plan_error":
+        if replan_count < MAX_REPLANS:
+            state["replan_count"] = replan_count + 1
+            await emit(run_id, "agent_thinking", "recovery", {"summary": f"Incomplete or malformed plan detected ({val_reason}). Triggering autonomous re-plan ({state['replan_count']}/{MAX_REPLANS})."})
+            state["current_step"] = "orchestrator"
+            return state
+
+    # 3. Enforce Bounded Retry Limit (Max 2 Recovery Attempts)
+    if recovery_attempts >= MAX_RECOVERY_ATTEMPTS:
+        if replan_count < MAX_REPLANS and "replan_count" in state:
+            state["replan_count"] = replan_count + 1
+            await emit(run_id, "agent_thinking", "recovery", {"summary": f"Maximum recovery attempts (2) reached. Triggering autonomous re-plan ({state['replan_count']}/{MAX_REPLANS})."})
+            state["current_step"] = "orchestrator"
+            return state
+        else:
+            await emit(run_id, "agent_thinking", "recovery", {"summary": "Maximum recovery attempts reached. Run failed validation."})
+            state["status"] = "failed"
+            state["current_step"] = "end"
+            return state
 
     state["recovery_attempts"] = recovery_attempts + 1
     attempt_num = state["recovery_attempts"]
 
-    # 3. Inspect Failure Observations
+    # 4. Inspect Failure Observations
     observations = state.get("observations", [])
     proc_obs = [o for o in observations if "exit_code" in o or "stderr" in o or "stdout" in o]
     last_proc = proc_obs[-1] if proc_obs else {}
@@ -41,7 +60,7 @@ async def recovery_node(state: dict) -> dict:
     stdout = last_proc.get("stdout", "")
     stderr = last_proc.get("stderr", "")
     
-    filename = last_proc.get("filename")
+    filename = last_proc.get("filename") or last_proc.get("target")
     if not filename or filename == "main.py":
         failed_steps = [s for s in state.get("plan", []) if s.get("status") == "failed"]
         if failed_steps:
@@ -50,7 +69,6 @@ async def recovery_node(state: dict) -> dict:
         targets = [s.get("target") for s in state.get("plan", []) if s.get("target") and s.get("target") != "."]
         filename = targets[0] if targets else "main.py"
 
-    val_reason = last_validation.get("reason", "")
     failure_kind = last_proc.get("kind") or classify_failure(exit_code, stdout, stderr, val_reason)
 
     ws = get_workspace_manager()
@@ -104,7 +122,6 @@ async def recovery_node(state: dict) -> dict:
             valid_repaired, clean_code, _ = extract_and_validate_artifact(rel_path, repaired_code)
 
         if not valid_repaired or not clean_code:
-            # Fallback repair: sanitize current_content or generate smart content
             from app.workspace.artifact_cleaner import extract_and_validate_artifact
             v_curr, c_curr, _ = extract_and_validate_artifact(rel_path, current_content)
             if v_curr and c_curr:
