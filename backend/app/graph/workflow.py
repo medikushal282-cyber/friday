@@ -32,7 +32,8 @@ async def execute_run_task(
     objective: str,
     runs_db: dict,
     recent_context: Optional[List[Dict[str, Any]]] = None,
-    on_complete: Optional[Callable[[Dict[str, Any]], None]] = None
+    on_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
+    continuation_context: Optional[Dict[str, Any]] = None,
 ):
     ws = get_workspace_manager()
     ws_info = {
@@ -46,6 +47,9 @@ async def execute_run_task(
         "objective": objective,
         "workspace": ws_info,
         "conversation_context": recent_context or [],
+        "continuation_context": continuation_context,
+        "previous_run_id": (continuation_context or {}).get("previous_run_id"),
+        "continuation_mode": continuation_context is not None,
         "plan": [],
         "current_step": "orchestrator",
         "research": [],
@@ -56,6 +60,11 @@ async def execute_run_task(
         "status": "started",
         "error": None,
         "retry_count": 0,
+        "max_retries": 3,
+        "recovery_history": [],
+        "knowledge_matches": [],
+        "knowledge_sources": [],
+        "recovery_mode": False,
 
         # Human-in-the-loop approval state
         "approval_required": False,
@@ -119,8 +128,37 @@ async def execute_run_task(
 
                 return
             
-        runs_db[run_id]["status"] = "completed"
-        await emit(run_id, "run_completed", data={"final_status": "completed"})
+        if (
+            state.get("recovery_exhausted")
+            or state.get("status") == "failed"
+            or (
+                state.get("validation_results")
+                and not state["validation_results"][-1].get("valid")
+            )
+        ):
+            state["status"] = "failed"
+            runs_db[run_id]["status"] = "failed"
+            runs_db[run_id]["state"] = state
+            await emit(
+                run_id,
+                "run_failed",
+                node=state.get("current_step", "validator"),
+                data={
+                    "error_type": "RecoveryExhausted"
+                    if state.get("recovery_exhausted")
+                    else "ValidationFailed",
+                    "message": "Run failed: execution could not be validated or recovery attempts exhausted.",
+                    "recovery_exhausted": bool(state.get("recovery_exhausted")),
+                    "validation": state.get("validation_results", [])[-1:]
+                    if state.get("validation_results")
+                    else [],
+                },
+            )
+        else:
+            state["status"] = "completed"
+            runs_db[run_id]["state"] = state
+            runs_db[run_id]["status"] = "completed"
+            await emit(run_id, "run_completed", data={"final_status": "completed"})
 
         # Save turn to session history for follow-up turns
         if on_complete:

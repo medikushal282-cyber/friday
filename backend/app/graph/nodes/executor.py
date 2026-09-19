@@ -75,6 +75,12 @@ async def executor_node(state: dict) -> dict:
             return step
         return None
 
+    # AUTONOMOUS REPAIR ACCEPTANCE SCENARIO
+    # Must run before generic modify/create heuristics because the objective
+    # intentionally contains words such as fix/bug/modify.
+    if _is_autonomous_repair_scenario(objective):
+        return await _autonomous_repair_setup(state, target_file, python_exe)
+
     # SCENARIO 1: DELETE OPERATION (Delete safety demo)
     if "delete" in obj_lower or "remove" in obj_lower:
         step = get_next_step()
@@ -196,7 +202,7 @@ async def executor_node(state: dict) -> dict:
         return state
 
     # SCENARIO 3: MODIFY / UPDATE OPERATION (Update acceptance demo)
-    if "modify" in obj_lower or "update" in obj_lower:
+    if "modify" in obj_lower or "update" in obj_lower or state.get("continuation_mode"):
         # Step A: Read existing file
         step_read = get_next_step()
         if step_read:
@@ -345,5 +351,80 @@ Rules:
         step_exec["status"] = "completed"
         await emit(run_id, "step_completed", "executor", {"step_id": step_exec["id"], "status": "completed"})
 
+    state["current_step"] = "validator"
+    return state
+
+
+def _is_autonomous_repair_scenario(objective: str) -> bool:
+    obj = objective.lower()
+    has_target = any(k in obj for k in [".py", "python", "program", "script", "code"])
+    has_failure = any(k in obj for k in ["bug", "intentionally", "fail", "error", "broken", "fault"])
+    has_recovery = any(k in obj for k in ["fix", "repair", "diagnose", "recover", "recovery", "run", "execute", "test"])
+    return has_target and has_failure and has_recovery
+
+
+async def _autonomous_repair_setup(state, target_file, python_exe):
+    """Create a deliberately failing program, then execute it once.
+
+    Recovery is intentionally NOT performed here. The validator must observe the
+    real first failure and hand control to the recovery node.
+    """
+    run_id = state["run_id"]
+    objective = state["objective"]
+
+    # Mark first executor plan step as started if present
+    executor_steps = [s for s in state.get("plan", []) if s.get("agent") == "executor"]
+    if executor_steps:
+        executor_steps[0]["status"] = "running"
+        await emit(run_id, "step_started", "executor", {"step_id": executor_steps[0]["id"]})
+
+    await emit(run_id, "agent_thinking", "executor", {
+        "summary": "Creating the requested failing program so Fraiday can observe and repair a real runtime error."
+    })
+
+    code = """def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factrial(n - 1)
+
+print(factorial(5))
+"""
+    await emit(run_id, "tool_call_started", "executor", {
+        "tool": "create_file", "path": target_file, "intent": "create_failing_program"
+    })
+    create_res = await asyncio.to_thread(
+        execute_tool, "create_file", path=target_file, content=code
+    )
+    await emit(run_id, "tool_call_completed", "executor", create_res)
+    await emit(run_id, "file_created", "executor", {
+        "path": target_file,
+        "lines": create_res.get("lines"),
+        "bytes_written": create_res.get("bytes_written"),
+        "intent": "create_failing_program",
+    })
+    state.setdefault("artifacts", []).append({
+        "type": "file", "path": target_file, "operation": "created"
+    })
+
+    cmd = f'"{python_exe}" "{target_file}"'
+    await emit(run_id, "command_started", "executor", {
+        "command": cmd, "attempt": "initial"
+    })
+    run_res = await asyncio.to_thread(
+        execute_tool, "run_command", command=cmd, timeout=20
+    )
+    await emit(run_id, "command_completed", "executor", run_res)
+
+    obs = {
+        "filename": target_file,
+        "command": run_res.get("command", cmd),
+        "stdout": run_res.get("stdout", ""),
+        "stderr": run_res.get("stderr", ""),
+        "exit_code": run_res.get("exit_code", 1),
+        "duration": run_res.get("duration", 0),
+        "attempt": "initial",
+    }
+    state.setdefault("observations", []).append(obs)
+    await emit(run_id, "observation_created", "executor", obs)
     state["current_step"] = "validator"
     return state

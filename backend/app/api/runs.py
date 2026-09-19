@@ -23,6 +23,9 @@ class RunResponse(BaseModel):
 class ApprovalRequest(BaseModel):
     decision: str
 
+class ContinueRequest(BaseModel):
+    objective: str
+
 # In-memory storage for active runs and conversation turn history
 RUNS_DB: Dict[str, Dict[str, Any]] = {}
 SESSION_HISTORY: List[Dict[str, Any]] = []
@@ -35,6 +38,20 @@ def append_session_history(entry: Dict[str, Any]):
     # Keep last 10 turns
     if len(SESSION_HISTORY) > 10:
         SESSION_HISTORY.pop(0)
+
+def build_continuation_context(previous_run: Dict[str, Any], objective: str) -> Dict[str, Any]:
+    state = previous_run.get("state") or {}
+    return {
+        "previous_run_id": previous_run.get("run_id"),
+        "previous_objective": previous_run.get("objective", ""),
+        "objective": objective,
+        "workspace": state.get("workspace", {}),
+        "plan": state.get("plan", []),
+        "observations": state.get("observations", []),
+        "artifacts": state.get("artifacts", []),
+        "relevant_files": [a.get("path") for a in state.get("artifacts", []) if a.get("path")],
+        "conversation_context": list(state.get("conversation_context", [])),
+    }
 
 @router.post("/", response_model=RunResponse)
 async def create_run(request: RunRequest):
@@ -53,6 +70,34 @@ async def create_run(request: RunRequest):
     asyncio.create_task(execute_run_task(run_id, request.objective, RUNS_DB, recent_context, append_session_history))
     
     return {"run_id": run_id, "status": "pending"}
+
+@router.post("/{run_id}/continue", response_model=RunResponse)
+async def continue_run(run_id: str, request: ContinueRequest):
+    previous = RUNS_DB.get(run_id)
+    if not previous:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not request.objective.strip():
+        raise HTTPException(status_code=400, detail="Continuation objective must not be empty")
+
+    context = build_continuation_context(previous, request.objective.strip())
+    new_run_id = f"run_{uuid.uuid4().hex[:8]}"
+    RUNS_DB[new_run_id] = {
+        "run_id": new_run_id,
+        "objective": request.objective.strip(),
+        "status": "pending",
+        "state": {},
+        "continuation_of": run_id,
+    }
+    recent_context = list(SESSION_HISTORY) + [context]
+    asyncio.create_task(execute_run_task(
+        new_run_id,
+        request.objective.strip(),
+        RUNS_DB,
+        recent_context,
+        append_session_history,
+        continuation_context=context,
+    ))
+    return {"run_id": new_run_id, "status": "pending"}
 
 @router.post("/{run_id}/approval", response_model=RunResponse)
 async def approve_run(run_id: str, request: ApprovalRequest):

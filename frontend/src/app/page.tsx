@@ -1,6 +1,6 @@
 /* eslint-disable react/jsx-no-comment-textnodes, react/no-unescaped-entities, react-hooks/exhaustive-deps */
 "use client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 interface ToolActivity {
   id: string;
@@ -37,10 +37,19 @@ export default function FraidayWorkspace() {
   const [switches, setSwitches] = useState({ web: true, kb: true, tools: true });
   
   const [inputVal, setInputVal] = useState("");
+  const [continuationSource, setContinuationSource] = useState<{ runId: string; artifact: string } | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   // --- PHASE 4.6 RUN STATE & ACTIVITY STREAM ---
   const [runId, setRunId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<string>('idle');
+  const [pendingApproval, setPendingApproval] = useState<{
+    runId: string;
+    tool: string;
+    path: string;
+    reason?: string;
+    status: 'pending' | 'approving' | 'rejecting' | 'approved' | 'rejected';
+  } | null>(null);
   const [runObjective, setRunObjective] = useState<string>('');
   const [planSteps, setPlanSteps] = useState<any[]>([]);
   const [nodes, setNodes] = useState<Record<string, string>>({});
@@ -253,14 +262,42 @@ export default function FraidayWorkspace() {
     }
   };
 
+  const handleApprovalDecision = async (decision: 'approve' | 'reject') => {
+    if (!pendingApproval || !runId || pendingApproval.status !== 'pending') return;
+
+    setPendingApproval(prev => prev ? {
+      ...prev,
+      status: decision === 'approve' ? 'approving' : 'rejecting'
+    } : null);
+
+    try {
+      const res = await fetch(`http://localhost:8000/api/runs/${runId}/approval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Approval request failed' }));
+        throw new Error(err.detail || `Server returned status ${res.status}`);
+      }
+    } catch (err: any) {
+      console.error("Failed to submit approval decision:", err);
+      alert(`Approval submission failed: ${err.message}`);
+      setPendingApproval(prev => prev ? { ...prev, status: 'pending' } : null);
+    }
+  };
+
   const startRun = async () => {
     if (!inputVal.trim()) return;
     if (runStatus === 'running' || runStatus === 'starting') return;
     
     const objective = inputVal;
     setInputVal("");
+    const continuingFrom = continuationSource;
     setRunId(null);
     setRunStatus('starting');
+    setPendingApproval(null);
     setRunObjective(objective);
     setPlanSteps([]);
     setNodes({});
@@ -272,7 +309,10 @@ export default function FraidayWorkspace() {
     setErrorInfo(null);
     
     try {
-      const res = await fetch('http://localhost:8000/api/runs/', {
+      const endpoint = continuingFrom
+        ? `http://localhost:8000/api/runs/${continuingFrom.runId}/continue`
+        : 'http://localhost:8000/api/runs/';
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ objective })
@@ -281,6 +321,7 @@ export default function FraidayWorkspace() {
       if (!res.ok) throw new Error('Failed to start run');
       const data = await res.json();
       setRunId(data.run_id);
+      setContinuationSource(null);
       setRunStatus('running');
       
       const evtSource = new EventSource(`http://localhost:8000/api/runs/${data.run_id}/events`);
@@ -394,9 +435,78 @@ export default function FraidayWorkspace() {
               title: eventData.valid ? `PASS: ${eventData.reason}` : `FAIL: ${eventData.reason}`,
               status: eventData.valid ? 'completed' : 'failed'
             });
+          } else if (type === 'recovery_started') {
+            addActivity({
+              type: 'RECOVERY',
+              title: `Autonomous Recovery Started (Attempt ${eventData.attempt}/${eventData.max_retries})`,
+              detail: `Target: ${eventData.path} | Error: ${eventData.error}`,
+              status: 'running'
+            });
+          } else if (type === 'recovery_completed') {
+            addActivity({
+              type: 'RECOVERY',
+              title: `Recovery Succeeded (Attempt ${eventData.attempt})`,
+              detail: `Target: ${eventData.path} | Exit code: ${eventData.exit_code}`,
+              status: 'completed'
+            });
+          } else if (type === 'recovery_failed') {
+            addActivity({
+              type: 'RECOVERY',
+              title: `Recovery Attempt ${eventData.attempt} Failed`,
+              detail: eventData.error,
+              status: 'failed'
+            });
+          } else if (type === 'recovery_exhausted') {
+            addActivity({
+              type: 'RECOVERY',
+              title: `Recovery Limit Exhausted (${eventData.retries}/${eventData.max_retries})`,
+              detail: 'All recovery attempts failed to resolve the issue.',
+              status: 'failed'
+            });
+          } else if (type === 'approval_required' || type === 'approval_requested') {
+            const req = eventData?.request || eventData;
+            const targetPath = req?.path || '';
+            const toolName = req?.tool || 'delete_file';
+            const reason = req?.reason || 'Destructive file modification requires explicit user approval.';
+            setPendingApproval({
+              runId: data.run_id,
+              tool: toolName,
+              path: targetPath,
+              reason: reason,
+              status: 'pending'
+            });
+            setRunStatus('paused');
+            addActivity({
+              type: 'APPROVAL',
+              title: `Approval Required: ${toolName.toUpperCase()} ${targetPath}`,
+              detail: reason,
+              status: 'approval_required'
+            });
+          } else if (type === 'approval_granted' || type === 'approval_approved') {
+            setPendingApproval(prev => prev ? { ...prev, status: 'approved' } : null);
+            setRunStatus('running');
+            addActivity({
+              type: 'APPROVAL',
+              title: `Approval Granted: ${(eventData?.request?.tool || 'Action')?.toUpperCase()}`,
+              detail: 'Authorization confirmed. Resuming execution...',
+              status: 'completed'
+            });
+          } else if (type === 'approval_rejected') {
+            setPendingApproval(prev => prev ? { ...prev, status: 'rejected' } : null);
+            setRunStatus('rejected');
+            addActivity({
+              type: 'APPROVAL',
+              title: `Approval Rejected: ${(eventData?.request?.tool || 'Action')?.toUpperCase()}`,
+              detail: 'Action denied by user. Run stopped without altering workspace.',
+              status: 'failed'
+            });
           } else if (type === 'run_completed') {
             evtSource.close();
-            setRunStatus('completed');
+            const isRejected = eventData?.final_status === 'rejected';
+            setRunStatus(isRejected ? 'rejected' : 'completed');
+            if (isRejected) {
+              setPendingApproval(prev => prev ? { ...prev, status: 'rejected' } : null);
+            }
             
             try {
               const finalRes = await fetch(`http://localhost:8000/api/runs/${data.run_id}`);
@@ -645,6 +755,10 @@ export default function FraidayWorkspace() {
                             <span className="font-bold text-[11px] uppercase tracking-wider font-mono">Execution Status</span>
                             {runStatus === 'running' || runStatus === 'starting' ? (
                                 <span className="bg-fra-yellow px-2 py-0.5 text-[10px] font-bold border border-black animate-pulse">[RUNNING]</span>
+                            ) : runStatus === 'paused' ? (
+                                <span className="bg-orange-500 text-black px-2 py-0.5 text-[10px] font-bold border border-black animate-pulse">[PAUSED: APPROVAL REQUIRED]</span>
+                            ) : runStatus === 'rejected' ? (
+                                <span className="bg-neutral-800 text-white px-2 py-0.5 text-[10px] font-bold border border-black">[REJECTED]</span>
                             ) : runStatus === 'completed' ? (
                                 <span className="bg-fra-green text-white px-2 py-0.5 text-[10px] font-bold border border-black">[COMPLETED]</span>
                             ) : (
@@ -653,6 +767,113 @@ export default function FraidayWorkspace() {
                           </div>
 
                           <div className="p-4 space-y-5">
+                            {/* HUMAN-IN-THE-LOOP APPROVAL PANEL */}
+                            {pendingApproval && (
+                              <div className="border-4 border-black bg-white p-5 shadow-brutal animate-fade-in">
+                                <div className="flex items-center justify-between border-b-2 border-black pb-3 mb-4">
+                                  <div className="flex items-center space-x-2">
+                                    <span className="bg-orange-500 text-black font-black text-xs px-2 py-0.5 border border-black animate-pulse">
+                                      ⚠ APPROVAL REQUIRED
+                                    </span>
+                                    <span className="font-mono text-xs font-bold text-neutral-700">
+                                      HUMAN-IN-THE-LOOP CONTROL
+                                    </span>
+                                  </div>
+                                  <span className="font-mono text-[10px] bg-neutral-100 border border-neutral-300 px-2 py-0.5 font-bold">
+                                    RUN: {pendingApproval.runId}
+                                  </span>
+                                </div>
+
+                                <div className="font-mono space-y-3 mb-4">
+                                  <div className="text-[11px] font-bold uppercase tracking-wider text-neutral-500">
+                                    Fraiday wants to perform:
+                                  </div>
+                                  <div className="border-2 border-black bg-neutral-50 p-3">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="font-black text-sm text-red-600 uppercase tracking-wide">
+                                        {pendingApproval.tool === 'delete_file' ? 'DELETE FILE' : pendingApproval.tool.toUpperCase()}
+                                      </span>
+                                      <span className="text-[9px] font-bold bg-red-100 text-red-800 px-1.5 py-0.5 border border-red-300 uppercase">
+                                        Destructive Action
+                                      </span>
+                                    </div>
+                                    <div className="font-bold text-sm text-black break-all py-1">
+                                      {pendingApproval.path}
+                                    </div>
+                                    {pendingApproval.reason && (
+                                      <div className="text-[11px] text-neutral-600 mt-2 pt-2 border-t border-neutral-200">
+                                        {pendingApproval.reason}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-neutral-600 italic">
+                                    This action modifies the workspace. Execution is safely paused until you authorize or reject this request.
+                                  </div>
+                                </div>
+
+                                {/* Dynamic Action State / Interactive Buttons */}
+                                {pendingApproval.status === 'pending' && (
+                                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t-2 border-black">
+                                    <div className="flex items-center space-x-2 text-xs font-mono text-orange-600 font-bold">
+                                      <span className="w-2.5 h-2.5 rounded-full bg-orange-500 animate-ping"></span>
+                                      <span>WAITING FOR APPROVAL</span>
+                                    </div>
+                                    <div className="flex items-center space-x-3">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleApprovalDecision('reject')}
+                                        className="px-5 py-2 font-mono font-bold text-xs bg-white text-black border-2 border-black shadow-brutal-sm hover:bg-neutral-100 active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer"
+                                      >
+                                        [ REJECT ]
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleApprovalDecision('approve')}
+                                        className="px-5 py-2 font-mono font-bold text-xs bg-red-600 text-white border-2 border-black shadow-brutal-sm hover:bg-red-700 active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer"
+                                      >
+                                        [ APPROVE ]
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {pendingApproval.status === 'approving' && (
+                                  <div className="flex items-center justify-between pt-3 border-t-2 border-black font-mono text-xs">
+                                    <span className="font-bold text-neutral-700 animate-pulse">SUBMITTING APPROVAL DECISION...</span>
+                                    <button disabled className="px-5 py-2 font-bold bg-neutral-200 text-neutral-500 border-2 border-neutral-400 cursor-not-allowed">
+                                      PROCESSING...
+                                    </button>
+                                  </div>
+                                )}
+
+                                {pendingApproval.status === 'rejecting' && (
+                                  <div className="flex items-center justify-between pt-3 border-t-2 border-black font-mono text-xs">
+                                    <span className="font-bold text-neutral-700 animate-pulse">SUBMITTING REJECTION DECISION...</span>
+                                    <button disabled className="px-5 py-2 font-bold bg-neutral-200 text-neutral-500 border-2 border-neutral-400 cursor-not-allowed">
+                                      PROCESSING...
+                                    </button>
+                                  </div>
+                                )}
+
+                                {pendingApproval.status === 'approved' && (
+                                  <div className="flex items-center justify-between pt-3 border-t-2 border-black font-mono text-xs">
+                                    <span className="font-bold text-fra-green">STATUS: APPROVED — ACTION EXECUTING</span>
+                                    <span className="bg-fra-green text-white font-bold px-3 py-1 border border-black">
+                                      [ AUTHORIZED ]
+                                    </span>
+                                  </div>
+                                )}
+
+                                {pendingApproval.status === 'rejected' && (
+                                  <div className="flex items-center justify-between pt-3 border-t-2 border-black font-mono text-xs">
+                                    <span className="font-bold text-red-600">STATUS: REJECTED — RUN TERMINATED</span>
+                                    <span className="bg-neutral-800 text-white font-bold px-3 py-1 border border-black">
+                                      [ ACTION DENIED ]
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             
                             {/* Execution Graph */}
                             <div className="border-2 border-fra-black bg-white p-3 shadow-brutal-sm">
@@ -804,7 +1025,14 @@ export default function FraidayWorkspace() {
                 {/* BottomPromptDock */}
                 <div className="p-3 border-t-2 border-fra-black bg-fra-cream flex-shrink-0">
                   <div className="border-2 border-fra-black bg-white shadow-brutal p-2 mb-2">
+                    {continuationSource && (
+                      <div className="mb-2 border-2 border-black bg-fra-yellow px-2 py-1.5 text-[10px] font-mono shadow-brutal-sm">
+                        <div className="font-black uppercase">CONTINUING RUN</div>
+                        <div className="truncate">{continuationSource.runId} · {continuationSource.artifact}</div>
+                      </div>
+                    )}
                     <textarea 
+                      ref={promptRef}
                       className="w-full text-xs font-mono border-0 focus:ring-0 resize-none p-1 text-black placeholder-neutral-500" 
                       placeholder="Enter instruction for autonomous execution in workspace..." 
                       rows={2}
@@ -828,7 +1056,7 @@ export default function FraidayWorkspace() {
                           className={`px-4 py-1.5 text-xs font-bold border-2 border-black flex items-center space-x-1.5 shadow-brutal-sm ${runStatus === 'starting' || runStatus === 'running' ? 'bg-neutral-400 text-neutral-600 cursor-not-allowed' : 'bg-black text-white hover:bg-neutral-800'}`}
                           onClick={startRun}
                         >
-                          <span>{runStatus === 'starting' || runStatus === 'running' ? 'Running...' : 'Send'}</span><span>-&gt;</span>
+                        <span>{runStatus === 'starting' || runStatus === 'running' ? 'Running...' : continuationSource ? 'Continue' : 'Send'}</span><span>-&gt;</span>
                         </button>
                       </div>
                     </div>
@@ -1031,6 +1259,11 @@ export default function FraidayWorkspace() {
                           return <div key={idx} className="border-2 border-fra-black bg-white p-2 shadow-brutal-sm">
                             <div className="font-bold text-[10px] truncate">{art.path}</div>
                             <div className="flex gap-1 mt-2">
+                              {runId && (runStatus === 'completed' || runStatus === 'rejected') && <button onClick={() => {
+                                setContinuationSource({ runId, artifact: art.path });
+                                setInputVal('');
+                                setTimeout(() => promptRef.current?.focus(), 0);
+                              }} className="border-2 border-black bg-fra-yellow px-1.5 py-0.5 text-[8px] font-black hover:bg-black hover:text-white">CONTINUE WORKING</button>}
                               {info && <button onClick={() => openWorkspaceFile(info)} className="border border-black px-1.5 py-0.5 text-[8px] font-bold hover:bg-fra-yellow">OPEN</button>}
                               {info && <button onClick={() => downloadWorkspaceFile(info.path)} className="border border-black px-1.5 py-0.5 text-[8px] font-bold hover:bg-fra-yellow">DOWNLOAD</button>}
                             </div>
@@ -1167,5 +1400,4 @@ export default function FraidayWorkspace() {
     </>
   );
 }
-
 

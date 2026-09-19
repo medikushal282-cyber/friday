@@ -32,3 +32,22 @@ frontend/page_backup*
 frontend/script*
 factorial.py
 main.py
+
+# Fraiday runtime knowledge store
+.fraiday/
+
+# Temporary patch/helper scripts
+apply_*.py
+
+# Backup files
+*.bak
+
+# Generated test/runtime artifacts
+broken.py
+broken_test.py
+buggy_*.py
+hello_*.py
+acceptance_report.json
+
+# Runtime uploads
+uploads/

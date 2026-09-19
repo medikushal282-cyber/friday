@@ -6,6 +6,9 @@ class FraidayState(TypedDict):
 
     workspace: Dict[str, Any]
     conversation_context: List[Dict[str, Any]]
+    continuation_context: Optional[Dict[str, Any]]
+    previous_run_id: Optional[str]
+    continuation_mode: bool
 
     plan: List[Dict[str, Any]]
     current_step: str
@@ -21,6 +24,11 @@ class FraidayState(TypedDict):
     error: Optional[Any]
 
     retry_count: int
+    max_retries: int
+    recovery_history: List[Dict[str, Any]]
+    knowledge_matches: List[Dict[str, Any]]
+    knowledge_sources: List[Dict[str, Any]]
+    recovery_mode: bool
 
     # Human-in-the-loop approval state
     approval_required: bool
