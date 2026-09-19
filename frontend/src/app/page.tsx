@@ -1,5 +1,7 @@
 "use client";
 import React, { useState, useEffect } from "react";
+import { WorkflowPanel } from "@/components/WorkflowPanel";
+import { ArtifactViewer } from "@/components/ArtifactViewer";
 
 interface ToolActivity {
   id: string;
@@ -28,7 +30,7 @@ export default function FraidayWorkspace() {
   
   const [inputVal, setInputVal] = useState("");
 
-  // --- PHASE 4.6 RUN STATE & ACTIVITY STREAM ---
+  // --- PHASE 4.6 & CODEX WORKSPACE STATE ---
   const [runId, setRunId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<string>('idle');
   const [runObjective, setRunObjective] = useState<string>('');
@@ -40,8 +42,17 @@ export default function FraidayWorkspace() {
   const [validationResult, setValidationResult] = useState<any>(null);
   const [finalResult, setFinalResult] = useState<any>(null);
   const [errorInfo, setErrorInfo] = useState<{ node?: string; message: string; error_type?: string } | null>(null);
+  
+  // Codex workspace extensions
+  const [activeCodeArtifact, setActiveCodeArtifact] = useState<{ filename: string; content: string; diff?: string; previousContent?: string; operation?: any } | null>(null);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [approvalRequired, setApprovalRequired] = useState(false);
+  const [approvalRequest, setApprovalRequest] = useState<any>(null);
+  const [rightPanelTab, setRightPanelTab] = useState<'workflow' | 'context' | 'agents' | 'artifacts'>('workflow');
+  const [availableModels, setAvailableModels] = useState<any[]>([]);
+  const [availableAgents, setAvailableAgents] = useState<any[]>([]);
 
-  // Fetch real workspace and runtime information from backend on mount
+  // Fetch real workspace, runtime, models, and agents from backend on mount
   useEffect(() => {
     const fetchWorkspace = async () => {
       try {
@@ -56,7 +67,31 @@ export default function FraidayWorkspace() {
         console.warn("Backend workspace API not reachable yet", e);
       }
     };
+    const fetchModels = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/models");
+        if (res.ok) {
+          const data = await res.json();
+          setAvailableModels(data);
+        }
+      } catch (e) {
+        console.warn("Backend models API not reachable yet", e);
+      }
+    };
+    const fetchAgents = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/agents");
+        if (res.ok) {
+          const data = await res.json();
+          setAvailableAgents(data);
+        }
+      } catch (e) {
+        console.warn("Backend agents API not reachable yet", e);
+      }
+    };
     fetchWorkspace();
+    fetchModels();
+    fetchAgents();
   }, []);
 
   const addActivity = (item: Omit<ToolActivity, 'id' | 'timestamp'>) => {
@@ -66,6 +101,26 @@ export default function FraidayWorkspace() {
       timestamp: new Date().toLocaleTimeString()
     };
     setActivityStream(prev => [...prev, activity]);
+  };
+
+  const handleApproval = async (decision: 'approve' | 'reject') => {
+    if (!runId) return;
+    try {
+      await fetch(`http://localhost:8000/api/runs/${runId}/approval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision })
+      });
+      setApprovalRequired(false);
+      setApprovalRequest(null);
+      addActivity({
+        type: 'APPROVAL',
+        title: `Approval ${decision.toUpperCase()}ED by user`,
+        status: decision === 'approve' ? 'completed' : 'failed'
+      });
+    } catch (err) {
+      console.error("Failed to submit approval decision", err);
+    }
   };
 
   const startRun = async () => {
@@ -85,12 +140,19 @@ export default function FraidayWorkspace() {
     setValidationResult(null);
     setFinalResult(null);
     setErrorInfo(null);
+    setActiveCodeArtifact(null);
+    setApprovalRequired(false);
+    setApprovalRequest(null);
     
     try {
       const res = await fetch('http://localhost:8000/api/runs/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ objective })
+        body: JSON.stringify({ 
+          objective,
+          mode: mode.toLowerCase(),
+          model: model
+        })
       });
       
       if (!res.ok) throw new Error('Failed to start run');
@@ -132,7 +194,23 @@ export default function FraidayWorkspace() {
           } else if (type === 'step_started') {
             setPlanSteps(prev => prev.map(s => s.id === eventData.step_id ? { ...s, status: 'running' } : s));
           } else if (type === 'step_completed') {
-            setPlanSteps(prev => prev.map(s => s.id === eventData.step_id ? { ...s, status: 'completed' } : s));
+            setPlanSteps(prev => prev.map(s => s.id === eventData.step_id ? { ...s, status: 'completed', result: eventData.result } : s));
+          } else if (type === 'step_failed') {
+            setPlanSteps(prev => prev.map(s => s.id === eventData.step_id ? { ...s, status: 'failed', reason: eventData.error } : s));
+          } else if (type === 'agent_reasoning_summary') {
+            addActivity({
+              type: 'REASONING',
+              title: `${(node || 'AGENT').toUpperCase()} Reasoning Summary`,
+              detail: eventData?.summary || eventData?.high_level_intent,
+              status: 'completed'
+            });
+          } else if (type === 'agent_selected') {
+            addActivity({
+              type: 'AGENT',
+              title: `Assigned: ${eventData?.agent_name || eventData?.agent_id} (${eventData?.role || 'Agent'})`,
+              detail: `Capabilities: ${(eventData?.capabilities || []).join(', ')}`,
+              status: 'completed'
+            });
           } else if (type === 'tool_call_started') {
             addActivity({
               type: 'ACTION',
@@ -152,6 +230,13 @@ export default function FraidayWorkspace() {
           } else if (type === 'file_created') {
             setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
             setArtifacts(prev => [...prev, { path: eventData.path, operation: 'created', type: 'file' }]);
+            if (eventData.content) {
+              setActiveCodeArtifact({
+                filename: eventData.path,
+                content: eventData.content,
+                operation: 'created'
+              });
+            }
             addActivity({
               type: 'CRUD',
               title: `File Created: ${eventData.path}`,
@@ -161,6 +246,15 @@ export default function FraidayWorkspace() {
           } else if (type === 'file_updated') {
             setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
             setArtifacts(prev => [...prev, { path: eventData.path, operation: 'updated', type: 'file' }]);
+            if (eventData.content) {
+              setActiveCodeArtifact({
+                filename: eventData.path,
+                content: eventData.content,
+                diff: eventData.diff,
+                previousContent: eventData.previous_content,
+                operation: 'updated'
+              });
+            }
             addActivity({
               type: 'CRUD',
               title: `File Updated: ${eventData.path}`,
@@ -183,6 +277,16 @@ export default function FraidayWorkspace() {
               title: `File Deletion: ${eventData.path}`,
               detail: isApproval ? 'Paused: Approval Required by Security Policy' : 'File deleted',
               status: isApproval ? 'approval_required' : 'completed'
+            });
+          } else if (type === 'approval_required') {
+            setApprovalRequired(true);
+            setApprovalRequest(eventData.request || eventData);
+            setRunStatus('waiting_for_approval');
+            addActivity({
+              type: 'APPROVAL',
+              title: `Human Approval Required: ${eventData.request?.tool || 'Action'} on ${eventData.request?.path || 'file'}`,
+              detail: eventData.request?.reason,
+              status: 'approval_required'
             });
           } else if (type === 'command_started') {
             addActivity({
@@ -605,6 +709,53 @@ export default function FraidayWorkspace() {
                               </div>
                             )}
 
+                            {/* Codex Interactive Code & Artifact Viewer */}
+                            {activeCodeArtifact && (
+                              <div className="border-2 border-fra-black bg-white p-3 shadow-brutal-sm">
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="font-bold text-[11px] uppercase tracking-wider font-mono">Workspace Code Artifact</span>
+                                  <button
+                                    onClick={() => setActiveCodeArtifact(null)}
+                                    className="text-[10px] font-bold text-neutral-500 hover:text-black font-mono border border-neutral-300 px-1 hover:bg-neutral-100"
+                                  >
+                                    [Close Preview]
+                                  </button>
+                                </div>
+                                <ArtifactViewer
+                                  filename={activeCodeArtifact.filename}
+                                  content={activeCodeArtifact.content}
+                                  diff={activeCodeArtifact.diff}
+                                  previousContent={activeCodeArtifact.previousContent}
+                                  operation={activeCodeArtifact.operation}
+                                  onRun={(fn) => {
+                                    setInputVal(`python ${fn}`);
+                                  }}
+                                  onContinue={() => {
+                                    setInputVal(`Continue working on ${activeCodeArtifact.filename}: refine implementation and verify`);
+                                  }}
+                                />
+                              </div>
+                            )}
+
+                            {/* Codex Continue Working Prompt Action */}
+                            {runStatus === 'completed' && (
+                              <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal flex items-center justify-between font-mono">
+                                <div>
+                                  <div className="font-bold text-xs uppercase text-fra-green">[COMPLETE] Goal Executed in Workspace</div>
+                                  <p className="text-[10px] text-neutral-600">Iterate on implementation, add unit tests, or run benchmarks.</p>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    setInputVal("Continue working on the previous task: add tests and optimize performance");
+                                  }}
+                                  className="border-2 border-black bg-black text-white px-3 py-1.5 text-xs font-bold shadow-brutal-sm hover:bg-neutral-800 flex items-center space-x-1"
+                                >
+                                  <span>Continue Working</span>
+                                  <span>-&gt;</span>
+                                </button>
+                              </div>
+                            )}
+
                           </div>
                         </div>
                       </div>
@@ -666,6 +817,34 @@ export default function FraidayWorkspace() {
                         <button className="border-2 border-fra-black bg-white px-2.5 py-1 font-bold flex items-center space-x-1.5 shadow-brutal-sm hover:bg-neutral-100" onClick={() => { setModelMenuOpen(!modelMenuOpen); setModeMenuOpen(false); }}>
                           <span>Active Model</span><span className="font-bold text-black bg-fra-yellow px-1 border border-black">{model}</span><span className="text-[8px]">v</span>
                         </button>
+                        {modelMenuOpen && (
+                          <div className="absolute bottom-8 left-0 w-72 bg-white border-2 border-fra-black shadow-brutal z-50 p-1 space-y-1">
+                            <div className="text-[9px] uppercase font-bold text-neutral-500 px-2 py-1 border-b border-neutral-200">Available Models & Providers</div>
+                            {(availableModels.length > 0 ? availableModels : [
+                              { id: 'qwen/qwen3.8-27b', display_name: 'Qwen 3.8 27B (Groq)', provider: 'groq', status: 'available' },
+                              { id: 'llama-3.3-70b-versatile', display_name: 'Llama 3.3 70B Versatile (Groq)', provider: 'groq', status: 'available' },
+                              { id: 'llama-3.1-8b-instant', display_name: 'Llama 3.1 8B Instant (Groq)', provider: 'groq', status: 'available' },
+                              { id: 'openai/gpt-4o', display_name: 'GPT-4o (OpenAI)', provider: 'openai', status: 'unconfigured' },
+                            ]).map(m => (
+                              <div
+                                key={m.id}
+                                className={`p-1.5 hover:bg-fra-yellow cursor-pointer border border-transparent hover:border-black flex items-center justify-between ${model === m.id ? 'bg-fra-cream-card border-black' : ''}`}
+                                onClick={() => { setModel(m.id); setModelMenuOpen(false); }}
+                              >
+                                <div>
+                                  <div className="font-bold text-[11px] text-black">{m.display_name || m.id}</div>
+                                  <div className="text-[9px] text-neutral-500 uppercase">{m.provider}</div>
+                                </div>
+                                <div className="flex items-center space-x-1">
+                                  <span className={`text-[8px] font-bold px-1 border border-black ${m.status === 'available' ? 'bg-fra-green text-white' : 'bg-neutral-200 text-neutral-600'}`}>
+                                    {m.status === 'available' ? 'READY' : 'UNCONFIG'}
+                                  </span>
+                                  {model === m.id && <span className="text-xs font-bold">[x]</span>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                     
@@ -684,99 +863,180 @@ export default function FraidayWorkspace() {
               {/* RightInspectorPanel */}
               <aside className="w-80 bg-fra-cream flex flex-col overflow-y-auto select-none font-mono">
                 <div className="grid grid-cols-4 border-b-2 border-fra-black text-[11px] font-bold text-center">
-                  <button className="py-2.5 bg-fra-yellow border-r-2 border-fra-black font-extrabold text-black">Context</button>
-                  <button className="py-2.5 bg-neutral-200 border-r-2 border-fra-black hover:bg-fra-yellow" onClick={() => setView('agents')}>Agents</button>
-                  <button className="py-2.5 bg-neutral-200 border-r-2 border-fra-black hover:bg-fra-yellow" onClick={() => alert('Files in workspace: ' + workspaceRoot)}>Files</button>
-                  <button className="py-2.5 bg-neutral-200 hover:bg-fra-yellow" onClick={() => alert('Artifacts: ' + (artifacts.length || 0))}>Artifacts</button>
+                  <button 
+                    className={`py-2.5 border-r-2 border-fra-black ${rightPanelTab === 'workflow' ? 'bg-fra-yellow font-extrabold text-black' : 'bg-neutral-200 hover:bg-fra-yellow'}`}
+                    onClick={() => setRightPanelTab('workflow')}
+                  >
+                    Workflow
+                  </button>
+                  <button 
+                    className={`py-2.5 border-r-2 border-fra-black ${rightPanelTab === 'context' ? 'bg-fra-yellow font-extrabold text-black' : 'bg-neutral-200 hover:bg-fra-yellow'}`}
+                    onClick={() => setRightPanelTab('context')}
+                  >
+                    Context
+                  </button>
+                  <button 
+                    className={`py-2.5 border-r-2 border-fra-black ${rightPanelTab === 'artifacts' ? 'bg-fra-yellow font-extrabold text-black' : 'bg-neutral-200 hover:bg-fra-yellow'}`}
+                    onClick={() => setRightPanelTab('artifacts')}
+                  >
+                    Artifacts ({artifacts.length})
+                  </button>
+                  <button 
+                    className={`py-2.5 ${rightPanelTab === 'agents' ? 'bg-fra-yellow font-extrabold text-black' : 'bg-neutral-200 hover:bg-fra-yellow'}`}
+                    onClick={() => setRightPanelTab('agents')}
+                  >
+                    Agents
+                  </button>
                 </div>
+
                 <div className="p-4 space-y-5 flex-1">
-                  
-                  {/* CONTEXT PANEL (STEP 10) */}
-                  <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
-                    <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN CONTEXT</div>
-                    <div className="space-y-1.5 text-[10px]">
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">WORKSPACE</span>
-                        <span className="font-bold text-black">{workspace}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">ROOT DIRECTORY</span>
-                        <span className="font-bold text-black truncate max-w-[160px]" title={workspaceRoot}>{workspaceRoot}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">ACTIVE RUNTIME</span>
-                        <span className="font-bold text-fra-green">Python {runtimeInfo?.python?.version || "3.x"}</span>
-                      </div>
-                      <div className="pt-1">
-                        <span className="text-neutral-600 block mb-1">RELEVANT FILES:</span>
-                        {relevantFiles.length === 0 ? (
-                          <span className="text-neutral-400 italic">None accessed yet</span>
-                        ) : (
-                          <div className="space-y-0.5">
-                            {relevantFiles.map(f => (
-                              <div key={f} className="text-black font-bold bg-white px-1 border border-neutral-300">
-                                {f}
+                  {rightPanelTab === 'workflow' && (
+                    <WorkflowPanel 
+                      steps={planSteps as any} 
+                      selectedStepId={selectedStepId} 
+                      onSelectStep={(stepId) => setSelectedStepId(stepId)} 
+                      approvalRequired={approvalRequired} 
+                      approvalRequest={approvalRequest} 
+                      onApprove={() => handleApproval('approve')} 
+                      onReject={() => handleApproval('reject')} 
+                    />
+                  )}
+
+                  {rightPanelTab === 'context' && (
+                    <>
+                      {/* RUN CONTEXT */}
+                      <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
+                        <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN CONTEXT</div>
+                        <div className="space-y-1.5 text-[10px]">
+                          <div className="flex justify-between border-b border-neutral-200 pb-1">
+                            <span className="text-neutral-600">WORKSPACE</span>
+                            <span className="font-bold text-black">{workspace}</span>
+                          </div>
+                          <div className="flex justify-between border-b border-neutral-200 pb-1">
+                            <span className="text-neutral-600">ROOT DIRECTORY</span>
+                            <span className="font-bold text-black truncate max-w-[160px]" title={workspaceRoot}>{workspaceRoot}</span>
+                          </div>
+                          <div className="flex justify-between border-b border-neutral-200 pb-1">
+                            <span className="text-neutral-600">ACTIVE RUNTIME</span>
+                            <span className="font-bold text-fra-green">Python {runtimeInfo?.python?.version || "3.x"}</span>
+                          </div>
+                          <div className="pt-1">
+                            <span className="text-neutral-600 block mb-1">RELEVANT FILES:</span>
+                            {relevantFiles.length === 0 ? (
+                              <span className="text-neutral-400 italic">None accessed yet</span>
+                            ) : (
+                              <div className="space-y-0.5">
+                                {relevantFiles.map(f => (
+                                  <div key={f} className="text-black font-bold bg-white px-1 border border-neutral-300">
+                                    {f}
+                                  </div>
+                                ))}
                               </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* WORKSPACE RUNTIME */}
+                      <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
+                        <div className="font-bold text-[11px] uppercase tracking-wider mb-2">WORKSPACE RUNTIME</div>
+                        <div className="space-y-1.5 text-[10px]">
+                          <div className="flex justify-between border-b border-neutral-200 pb-1">
+                            <span className="text-neutral-600">Python Runtime</span>
+                            <span className="font-bold text-fra-green">
+                              {runtimeInfo?.python?.version ? `v${runtimeInfo.python.version} READY` : "READY"}
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-b border-neutral-200 pb-1">
+                            <span className="text-neutral-600">Node.js Engine</span>
+                            <span className="font-bold text-fra-green">
+                              {runtimeInfo?.node?.version ? `v${runtimeInfo.node.version} READY` : "READY"}
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-b border-neutral-200 pb-1">
+                            <span className="text-neutral-600">Git SCM</span>
+                            <span className="font-bold text-fra-green">
+                              {runtimeInfo?.git?.version ? `v${runtimeInfo.git.version} READY` : "READY"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* QUICK ACTIONS */}
+                      <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
+                        <div className="font-bold text-[11px] uppercase tracking-wider mb-2">QUICK ACTIONS</div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px]">
+                          <button className="border-2 border-fra-black bg-fra-cream-card p-2 font-bold shadow-brutal-sm hover:bg-fra-yellow flex items-center justify-center space-x-1" onClick={() => setView('runs')}>
+                            <span>View Runs</span>
+                          </button>
+                          <button className="border-2 border-fra-black bg-fra-cream-card p-2 font-bold shadow-brutal-sm hover:bg-fra-yellow flex items-center justify-center space-x-1" onClick={() => alert('Files in: ' + workspaceRoot)}>
+                            <span>Open Root</span>
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {rightPanelTab === 'artifacts' && (
+                    <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
+                      <div className="font-bold text-[11px] uppercase tracking-wider mb-2">GENERATED ARTIFACTS</div>
+                      {artifacts.length === 0 ? (
+                        <div className="text-[10px] text-neutral-400 italic">No artifacts generated yet. Run a prompt to generate files.</div>
+                      ) : (
+                        <div className="space-y-2 text-[10px]">
+                          {artifacts.map((art, idx) => (
+                            <div key={idx} className="border border-black bg-white p-2 flex flex-col gap-1 shadow-brutal-sm">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-black truncate max-w-[170px]" title={art.path}>{art.path}</span>
+                                <span className="text-[9px] uppercase font-bold bg-fra-yellow px-1 border border-black">{art.operation}</span>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  setActiveCodeArtifact({
+                                    filename: art.path,
+                                    content: `# Artifact preview: ${art.path}\n# Loading from workspace...`,
+                                    operation: art.operation
+                                  });
+                                }}
+                                className="w-full text-center py-1 bg-black text-white hover:bg-neutral-800 text-[9px] font-bold border border-black"
+                              >
+                                Preview in Artifact Viewer
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {rightPanelTab === 'agents' && (
+                    <div className="space-y-3">
+                      <div className="font-bold text-[11px] uppercase tracking-wider mb-1">SPECIALIZED AGENT REGISTRY</div>
+                      {(availableAgents.length > 0 ? availableAgents : [
+                        { id: 'orchestrator', name: 'Orchestrator', description: 'Plans and coordinates workflows', approval_policy: 'standard', capabilities: ['planning', 'task_decomposition'] },
+                        { id: 'coding_agent', name: 'Coding Agent', description: 'Authors and edits source files', approval_policy: 'standard', capabilities: ['code_generation', 'file_crud'] },
+                        { id: 'testing_agent', name: 'Testing Agent', description: 'Executes scripts and tests', approval_policy: 'sensitive', capabilities: ['command_execution'] },
+                        { id: 'security_agent', name: 'Security Policy Agent', description: 'Reviews dangerous operations and requires approval', approval_policy: 'strict', capabilities: ['policy_enforcement'] },
+                      ]).map((ag: any) => (
+                        <div key={ag.id} className="border-2 border-black bg-white p-2.5 shadow-brutal-sm">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-bold text-xs text-black">{ag.name}</span>
+                            <span className={`text-[8px] uppercase px-1 font-bold border border-black ${ag.approval_policy === 'strict' ? 'bg-red-400 text-black' : ag.approval_policy === 'sensitive' ? 'bg-orange-300 text-black' : 'bg-fra-yellow text-black'}`}>
+                              {ag.approval_policy}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-neutral-600 mb-2">{ag.description}</p>
+                          <div className="flex flex-wrap gap-1">
+                            {(ag.capabilities || []).map((cap: string) => (
+                              <span key={cap} className="text-[8px] font-mono bg-neutral-100 border border-neutral-300 px-1 text-neutral-700">
+                                #{cap}
+                              </span>
                             ))}
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      ))}
                     </div>
-                  </div>
-
-                  {/* ARTIFACTS PANEL (STEP 15) */}
-                  <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
-                    <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN ARTIFACTS</div>
-                    {artifacts.length === 0 ? (
-                      <div className="text-[10px] text-neutral-400 italic">No artifacts generated yet.</div>
-                    ) : (
-                      <div className="space-y-1.5 text-[10px]">
-                        {artifacts.map((art, idx) => (
-                          <div key={idx} className="flex items-center justify-between border border-black bg-white p-1.5">
-                            <span className="font-bold">{art.path}</span>
-                            <span className="text-[9px] uppercase font-bold bg-fra-yellow px-1 border border-black">{art.operation}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  
-                  {/* WORKSPACE RUNTIME PANEL */}
-                  <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
-                    <div className="font-bold text-[11px] uppercase tracking-wider mb-2">WORKSPACE RUNTIME</div>
-                    <div className="space-y-1.5 text-[10px]">
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">Python Runtime</span>
-                        <span className="font-bold text-fra-green">
-                          {runtimeInfo?.python?.version ? `v${runtimeInfo.python.version} READY` : "READY"}
-                        </span>
-                      </div>
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">Node.js Engine</span>
-                        <span className="font-bold text-fra-green">
-                          {runtimeInfo?.node?.version ? `v${runtimeInfo.node.version} READY` : "READY"}
-                        </span>
-                      </div>
-                      <div className="flex justify-between border-b border-neutral-200 pb-1">
-                        <span className="text-neutral-600">Git SCM</span>
-                        <span className="font-bold text-fra-green">
-                          {runtimeInfo?.git?.version ? `v${runtimeInfo.git.version} READY` : "READY"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="border-2 border-fra-black bg-fra-cream-card p-3 shadow-brutal">
-                    <div className="font-bold text-[11px] uppercase tracking-wider mb-2">QUICK ACTIONS</div>
-                    <div className="grid grid-cols-2 gap-2 text-[11px]">
-                      <button className="border-2 border-fra-black bg-fra-cream-card p-2 font-bold shadow-brutal-sm hover:bg-fra-yellow flex items-center justify-center space-x-1" onClick={() => setView('runs')}>
-                        <span>View Runs</span>
-                      </button>
-                      <button className="border-2 border-fra-black bg-fra-cream-card p-2 font-bold shadow-brutal-sm hover:bg-fra-yellow flex items-center justify-center space-x-1" onClick={() => alert('Files in: ' + workspaceRoot)}>
-                        <span>Open Root</span>
-                      </button>
-                    </div>
-                  </div>
+                  )}
                 </div>
               </aside>
             </div>
