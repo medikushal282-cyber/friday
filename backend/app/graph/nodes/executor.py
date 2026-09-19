@@ -278,7 +278,12 @@ async def executor_node(state: dict) -> dict:
         ]
 
         if not runnable_steps:
-            break
+            pending = [s for s in plan if s.get("status", "pending") in ["pending", None]]
+            if pending:
+                # Dependency deadlock fallback: execute next pending step
+                runnable_steps = [pending[0]]
+            else:
+                break
 
         step = runnable_steps[0]
         step["status"] = "running"

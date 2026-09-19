@@ -359,9 +359,15 @@ Do NOT include markdown or chain-of-thought."""
                 "reason": s.get("reason", "Objective requirement execution"),
                 "result": None
             })
+        # Sanitize depends_on to only include IDs of previous steps that exist in this plan
+        valid_ids = set()
+        for s in steps:
+            s["depends_on"] = [dep for dep in s.get("depends_on", []) if dep in valid_ids]
+            valid_ids.add(s["id"])
 
     if not steps:
         steps = build_dynamic_fallback_plan(objective, existing_files, context)
+
 
     state["plan"] = steps
     await emit(state["run_id"], "plan_created", "orchestrator", {"steps": steps})
