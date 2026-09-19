@@ -55,6 +55,7 @@ async def create_run(request: RunRequest):
     return {"run_id": run_id, "status": "pending"}
 
 @router.post("/{run_id}/approval", response_model=RunResponse)
+@router.post("/{run_id}/approve", response_model=RunResponse)
 async def approve_run(run_id: str, request: ApprovalRequest):
     if run_id not in RUNS_DB:
         raise HTTPException(status_code=404, detail="Run not found")

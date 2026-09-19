@@ -315,7 +315,8 @@ Existing Workspace Files: {json.dumps(existing_files)}
 Rules:
 1. Every step MUST include: id, description, agent ("executor"), action, target, arguments, depends_on (list of step ids), status ("pending").
 2. Ensure steps reflect true dependencies (e.g. creating input data before running script).
-3. Return ONLY a JSON object with this schema:
+3. When executing a Python file, use arguments: {{"command": "python <filename>"}}. Do not write complex inline "-c" import assertions.
+4. Return ONLY a JSON object with this schema:
 {{
   "steps": [
     {{

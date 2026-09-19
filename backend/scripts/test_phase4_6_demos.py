@@ -33,7 +33,7 @@ def submit_and_stream(objective: str):
                     print(f"  [{evt_type.upper()}] cmd={data.get('command')} exit={data.get('exit_code', '-')}")
                 elif evt_type == "validation_result":
                     print(f"  [VALIDATION] valid={data.get('valid')} reason={data.get('reason')}")
-                elif evt_type in ["run_completed", "run_failed"]:
+                elif evt_type in ["run_completed", "run_failed", "approval_required"]:
                     print(f"  [STREAM_END] {evt_type}")
                     break
 
@@ -64,9 +64,9 @@ def run_phase4_6_demos():
     # Assertions for Demo 1
     obs1 = state1.get("observations", [])
     assert obs1, "No observations recorded!"
-    first_obs = obs1[0]
-    stdout1 = first_obs.get("stdout", "").strip()
-    assert first_obs.get("exit_code") == 0, f"Expected exit code 0, got {first_obs.get('exit_code')}"
+    run_obs1 = next((o for o in obs1 if o.get("tool") == "run_command" or "stdout" in o), obs1[-1])
+    stdout1 = run_obs1.get("stdout", "").strip()
+    assert run_obs1.get("exit_code") == 0, f"Expected exit code 0, got {run_obs1.get('exit_code')}"
     assert "120" in stdout1, f"Expected 120 in stdout, got {stdout1}"
     assert state1.get("validation_results", [{}])[-1].get("valid") is True, "Validation should pass"
     assert any(a.get("path") == "factorial.py" and a.get("operation") == "created" for a in state1.get("artifacts", [])), "Artifact not tracked"
@@ -80,7 +80,7 @@ def run_phase4_6_demos():
     # Assertions for Demo 2
     obs2 = state2.get("observations", [])
     assert obs2, "No observations recorded in update turn!"
-    exec_obs2 = next((o for o in obs2 if "command" in o), obs2[-1])
+    exec_obs2 = next((o for o in obs2 if "command" in o or o.get("tool") == "run_command"), obs2[-1])
     stdout2 = exec_obs2.get("stdout", "").strip()
     assert exec_obs2.get("exit_code") == 0, f"Expected exit code 0, got {exec_obs2.get('exit_code')}"
     assert "120" in stdout2, f"Expected 120 in stdout, got {stdout2}"
@@ -96,7 +96,7 @@ def run_phase4_6_demos():
     # Assertions for Demo 3
     obs3 = state3.get("observations", [])
     assert obs3, "No read observation recorded!"
-    read_obs = obs3[0]
+    read_obs = next((o for o in obs3 if o.get("tool") == "read_file" or "stdout" in o), obs3[0])
     stdout3 = read_obs.get("stdout", "").strip()
     assert read_obs.get("exit_code") == 0
     assert "def factorial" in stdout3, f"Expected Python source code, got: {stdout3}"

@@ -452,6 +452,15 @@ async def executor_node(state: dict) -> dict:
                     "path": rel_path,
                     "reason": res.get("reason", "Destructive file deletion requires explicit user approval.")
                 }
+                obs = {
+                    "tool": "delete_file",
+                    "path": rel_path,
+                    "status": "approval_required",
+                    "reason": res.get("reason"),
+                    "exit_code": 0
+                }
+                state.setdefault("observations", []).append(obs)
+                await emit(run_id, "observation_created", "executor", obs)
                 step["status"] = "blocked"
                 await emit(run_id, "approval_requested", "executor", state["approval_request"])
                 await emit(run_id, "step_completed", "executor", {"step_id": step_id, "status": "blocked"})
