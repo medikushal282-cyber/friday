@@ -10,6 +10,8 @@ from app.api.runs import router as runs_router
 from app.api.workspace import router as workspace_router
 from app.api.models import router as models_router
 from app.api.agents import router as agents_router
+from app.api.conversations import router as conv_router
+from app.api.terminals import router as terms_router
 from app.llm.router import call_groq
 
 app = FastAPI(title="Fraiday Orchestration API", version="0.1.0")
@@ -26,6 +28,8 @@ app.include_router(runs_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(models_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
+app.include_router(conv_router, prefix="/api")
+app.include_router(terms_router, prefix="/api")
 
 
 @app.get("/health")

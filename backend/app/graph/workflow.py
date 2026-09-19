@@ -96,6 +96,9 @@ async def execute_run_task(
     
     try:
         while state["current_step"] != "end":
+            if state.get("is_cancelled"):
+                runs_db[run_id]["status"] = "cancelled"
+                break
             state["autonomous_iteration_count"] += 1
 
             # Bounded Autonomous Control Decision
@@ -354,6 +357,10 @@ async def resume_approved_run(
 
     # Resume the remaining workflow from the validator.
     while state["current_step"] != "end":
+        if state.get("is_cancelled"):
+            runs_db[run_id]["status"] = "cancelled"
+            break
+
         current_node_name = state["current_step"]
 
         if current_node_name not in nodes:

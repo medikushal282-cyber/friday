@@ -35,6 +35,14 @@ TOOL_SCHEMAS = {
     "inspect_runtime": {
         "description": "Returns runtime environment information for Python, Node, Git, etc.",
         "parameters": {}
+    },
+    "run_background_command": {
+        "description": "Spawns a long-running process in the background. Returns a terminal_id.",
+        "parameters": {"command": "string (required)", "cwd": "string (required)"}
+    },
+    "manage_background_terminal": {
+        "description": "Manage a background terminal by ID.",
+        "parameters": {"terminal_id": "string (required)", "action": "kill or logs (required)"}
     }
 }
 
@@ -418,6 +426,8 @@ def tool_inspect_runtime() -> Dict[str, Any]:
             "error": {"code": "TOOL_EXECUTION_ERROR", "message": str(e)}
         }
 
+from app.tools.terminal import run_background_command, manage_background_terminal
+
 DISPATCH_TABLE = {
     "list_directory": tool_list_directory,
     "read_file": tool_read_file,
@@ -425,7 +435,9 @@ DISPATCH_TABLE = {
     "update_file": tool_update_file,
     "delete_file": tool_delete_file,
     "run_command": tool_run_command,
-    "inspect_runtime": tool_inspect_runtime
+    "inspect_runtime": tool_inspect_runtime,
+    "run_background_command": run_background_command,
+    "manage_background_terminal": manage_background_terminal
 }
 
 def validate_action_schema(action: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:

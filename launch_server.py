@@ -3,6 +3,7 @@ import socketserver
 import argparse
 import sys
 import os
+import errno
 from pathlib import Path
 import unittest
 import tempfile
@@ -45,11 +46,31 @@ def create_server(port: int, directory: Path) -> socketserver.TCPServer:
     handler = lambda *args, **kwargs: handler_class(*args, directory=str(directory), **kwargs)
     return socketserver.ThreadingTCPServer(("", port), handler)
 
+def _is_addr_in_use_error(exc: OSError) -> bool:
+    """Return True if the OSError indicates the address is already in use."""
+    if exc.errno == errno.EADDRINUSE:
+        return True
+    # On Windows, errno may be None and winerror is set to 10048
+    return getattr(exc, "winerror", None) == 10048
+
 def run_server(port: int, directory: Path):
-    """Start an HTTP server serving the given directory."""
-    httpd = create_server(port, directory)
+    """Start an HTTP server serving the given directory.
+
+    If the requested port is already in use, fall back to an OS‑assigned free port.
+    """
     try:
-        print(f"Serving HTTP on 0.0.0.0 port {port} (http://localhost:{port}/) ...")
+        httpd = create_server(port, directory)
+    except OSError as exc:
+        if _is_addr_in_use_error(exc):
+            sys.stderr.write(f"Port {port} already in use, switching to an available port.\n")
+            httpd = create_server(0, directory)  # 0 lets OS pick a free port
+        else:
+            sys.stderr.write(f"Server error: {exc}\n")
+            sys.exit(1)
+
+    try:
+        bound_port = httpd.server_address[1]
+        print(f"Serving HTTP on 0.0.0.0 port {bound_port} (http://localhost:{bound_port}/) ...")
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nServer stopped by user.")
@@ -107,18 +128,13 @@ class TestLaunchServer(unittest.TestCase):
     def test_create_server_bind(self):
         with tempfile.TemporaryDirectory() as td:
             dir_path = Path(td)
-            # Use an unlikely high port to avoid collisions; OS will assign if 0.
             server = create_server(0, dir_path)
             try:
                 self.assertTrue(server.server_address[1] > 0)
-                # Ensure the server's handler serves from the correct directory
                 handler = server.RequestHandlerClass
-                # The handler is a lambda that returns SimpleHTTPRequestHandler with directory set
-                # We verify that invoking it yields an instance with the expected directory attribute
                 request = unittest.mock.MagicMock()
                 client_address = ('127.0.0.1', 12345)
-                server_instance = server
-                handler_instance = handler(request, client_address, server_instance)
+                handler_instance = handler(request, client_address, server)
                 self.assertEqual(handler_instance.directory, str(dir_path))
             finally:
                 server.server_close()

@@ -143,6 +143,25 @@ async def stream_run_events(run_id: str):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@router.post("/{run_id}/cancel")
+async def cancel_run(run_id: str):
+    if run_id not in RUNS_DB:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = RUNS_DB[run_id]
+    if run.get("status") in ["completed", "failed", "cancelled"]:
+        raise HTTPException(status_code=400, detail="Run is already finished")
+        
+    # Mark it in the global state, the graph loop should check this
+    state = run.get("state", {})
+    state["is_cancelled"] = True
+    run["status"] = "cancelled"
+    
+    from app.events import emit
+    asyncio.create_task(emit(run_id, "run_cancelled", {"message": "Run cancelled by user"}))
+    
+    return {"success": True, "message": "Run cancellation requested"}
+
 @router.get("/{run_id}")
 async def get_run(run_id: str):
     if run_id not in RUNS_DB:
