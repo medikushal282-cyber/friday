@@ -790,7 +790,7 @@ export default function FraidayWorkspace() {
                       value={inputVal}
                       onChange={(e) => setInputVal(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.ctrlKey && e.key === 'Enter') {
+                        if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault();
                           startRun();
                         }
@@ -801,7 +801,7 @@ export default function FraidayWorkspace() {
                         <button className="hover:text-black font-mono font-bold text-xs" onClick={() => setInputVal(prev => prev + ' ```\n\n```')}>&lt;/&gt;</button>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <span className="text-[10px] text-neutral-500 font-mono hidden sm:inline">Ctrl + Enter</span>
+                        <span className="text-[10px] text-neutral-500 font-mono hidden sm:inline">Enter to send · Shift+Enter for newline</span>
                         <button 
                           disabled={runStatus === 'starting' || runStatus === 'running'}
                           className={`px-4 py-1.5 text-xs font-bold border-2 border-black flex items-center space-x-1.5 shadow-brutal-sm ${runStatus === 'starting' || runStatus === 'running' ? 'bg-neutral-400 text-neutral-600 cursor-not-allowed' : 'bg-black text-white hover:bg-neutral-800'}`}
