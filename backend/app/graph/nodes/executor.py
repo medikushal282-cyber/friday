@@ -54,7 +54,8 @@ def record_artifact(state: dict, path: str, operation: str = "created"):
     artifacts = state.setdefault("artifacts", [])
     existing = next((a for a in artifacts if a.get("path") == path), None)
     if existing:
-        existing["operation"] = operation
+        if existing.get("operation") != "created":
+            existing["operation"] = operation
     else:
         artifacts.append({"type": "file", "path": path, "operation": operation})
 
@@ -360,7 +361,11 @@ async def executor_node(state: dict) -> dict:
 
             await emit(run_id, "tool_call_completed", "executor", res)
             if res.get("success"):
-                await emit(run_id, "file_created", "executor", {"path": rel_path, "lines": res.get("lines")})
+                await emit(run_id, "file_created", "executor", {
+                    "path": rel_path,
+                    "lines": res.get("lines"),
+                    "content": res.get("result", {}).get("content", code)
+                })
                 record_artifact(state, rel_path, "created")
 
             state.setdefault("tool_calls", []).append({"action": {"tool": "create_file", "arguments": {"path": rel_path}}, "result": res})
@@ -416,7 +421,14 @@ async def executor_node(state: dict) -> dict:
 
             await emit(run_id, "tool_call_completed", "executor", res)
             if res.get("success"):
-                await emit(run_id, "file_updated", "executor", {"path": rel_path, "lines": res.get("lines")})
+                diff_val = res.get("result", {}).get("diff") or res.get("diff", "Modified")
+                await emit(run_id, "file_updated", "executor", {
+                    "path": rel_path,
+                    "lines": res.get("lines"),
+                    "diff": diff_val,
+                    "content": updated_code,
+                    "previous_content": existing_code
+                })
                 record_artifact(state, rel_path, "updated")
 
             state.setdefault("tool_calls", []).append({"action": {"tool": "update_file", "arguments": {"path": rel_path}}, "result": res})

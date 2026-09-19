@@ -45,7 +45,9 @@ async def execute_run_task(
     objective: str,
     runs_db: dict,
     recent_context: Optional[List[Dict[str, Any]]] = None,
-    on_complete: Optional[Callable[[Dict[str, Any]], None]] = None
+    on_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
+    mode: str = "autonomous",
+    model_routing: Optional[Dict[str, str]] = None
 ):
     ws = get_workspace_manager()
     ws_info = {
@@ -57,6 +59,8 @@ async def execute_run_task(
     state = {
         "run_id": run_id,
         "objective": objective,
+        "mode": mode.lower(),
+        "model_routing": model_routing or {},
         "workspace": ws_info,
         "conversation_context": recent_context or [],
         "plan": [],
@@ -83,6 +87,7 @@ async def execute_run_task(
 
     await emit(run_id, "context_loaded", "orchestrator", {
         "workspace": ws_info,
+        "mode": mode,
         "conversation_turns": len(state["conversation_context"]),
         "objective": objective
     })

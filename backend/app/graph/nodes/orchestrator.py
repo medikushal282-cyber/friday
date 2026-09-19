@@ -343,16 +343,51 @@ Do NOT include markdown or chain-of-thought."""
     except Exception:
         plan_data = None
 
+    from app.agents.registry import get_agent_registry
+    registry = get_agent_registry()
+    selected_agents = registry.select_agents_for_objective(objective)
+    state["selected_agents"] = selected_agents
+
+    # Emit structured reasoning summary and agent selection
+    summary_text = (
+        f"Interpreted objective: '{objective}'. Workspace contains {len(existing_files)} files. "
+        f"Coordinating {len(selected_agents)} specialized agent roles: {', '.join(selected_agents)}."
+    )
+    await emit(state["run_id"], "agent_reasoning_summary", "orchestrator", {
+        "summary": summary_text,
+        "selected_agents": selected_agents
+    })
+
+    for ag_id in selected_agents:
+        ag_profile = registry.get_agent(ag_id)
+        if ag_profile:
+            await emit(state["run_id"], "agent_selected", "orchestrator", {
+                "agent_id": ag_id,
+                "agent_name": ag_profile.name,
+                "name": ag_profile.name,
+                "role": ag_profile.name,
+                "capabilities": ag_profile.capabilities,
+                "approval_policy": ag_profile.approval_policy
+            })
+
     steps = []
     if plan_data and isinstance(plan_data, dict) and "steps" in plan_data:
         raw_steps = plan_data.get("steps", [])
         for i, s in enumerate(raw_steps):
+            action_name = s.get("action", "RUN_COMMAND")
+            target_name = s.get("target", "main.py")
+            # Map action to specialized agent profile
+            assigned_agent = "coding_agent" if action_name in ["CREATE_FILE", "UPDATE_FILE"] else (
+                "testing_agent" if action_name == "RUN_COMMAND" else (
+                    "security_agent" if action_name == "DELETE_FILE" else "executor"
+                )
+            )
             steps.append({
                 "id": s.get("id", f"step_{i+1}"),
                 "description": s.get("description", "Execute action step"),
-                "agent": s.get("agent", "executor"),
-                "action": s.get("action", "RUN_COMMAND"),
-                "target": s.get("target", "main.py"),
+                "agent": assigned_agent,
+                "action": action_name,
+                "target": target_name,
                 "arguments": s.get("arguments", {}),
                 "depends_on": s.get("depends_on", []),
                 "status": "pending",
@@ -368,9 +403,9 @@ Do NOT include markdown or chain-of-thought."""
     if not steps:
         steps = build_dynamic_fallback_plan(objective, existing_files, context)
 
-
     state["plan"] = steps
     await emit(state["run_id"], "plan_created", "orchestrator", {"steps": steps})
 
     state["current_step"] = "researcher"
     return state
+

@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uuid
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from app.graph.workflow import execute_run_task, resume_approved_run
 from app.events import get_queue
@@ -15,6 +15,10 @@ router = APIRouter(prefix="/runs", tags=["Runs"])
 
 class RunRequest(BaseModel):
     objective: str
+    mode: Optional[str] = "autonomous"  # autonomous, assisted, planning, review
+    model: Optional[str] = "qwen/qwen3.8-27b"
+    model_routing: Optional[Dict[str, str]] = None
+    parent_run_id: Optional[str] = None
 
 class RunResponse(BaseModel):
     run_id: str
@@ -43,6 +47,9 @@ async def create_run(request: RunRequest):
     RUNS_DB[run_id] = {
         "run_id": run_id,
         "objective": request.objective,
+        "mode": request.mode or "autonomous",
+        "model": request.model or "qwen/qwen3.8-27b",
+        "model_routing": request.model_routing or {},
         "status": "pending",
         "state": {}
     }
@@ -50,7 +57,17 @@ async def create_run(request: RunRequest):
     # Snapshot of recent conversation context
     recent_context = list(SESSION_HISTORY)
     
-    asyncio.create_task(execute_run_task(run_id, request.objective, RUNS_DB, recent_context, append_session_history))
+    asyncio.create_task(
+        execute_run_task(
+            run_id,
+            request.objective,
+            RUNS_DB,
+            recent_context,
+            append_session_history,
+            mode=request.mode or "autonomous",
+            model_routing=request.model_routing or {}
+        )
+    )
     
     return {"run_id": run_id, "status": "pending"}
 
