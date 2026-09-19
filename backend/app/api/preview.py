@@ -87,7 +87,7 @@ async def serve_preview_file(file_path: str):
             abs_path = index_cand
             
     if not abs_path.exists() or not abs_path.is_file():
-        available = [f.name for f in wm.root.glob("*") if f.is_file()][:10]
+        available = [f.name for f in Path(wm.root_path).glob("*") if f.is_file()][:10]
         avail_html = "".join([f'<li><a href="/api/preview/{name}" style="color:#FFE600;">{name}</a></li>' for name in available])
         not_found_html = f"""<!DOCTYPE html>
 <html>

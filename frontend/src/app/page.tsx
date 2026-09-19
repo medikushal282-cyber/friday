@@ -1,9 +1,10 @@
 "use client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import LatticeLoader from "@/components/LatticeLoader";
 import ThinkingView, { ThoughtItem } from "@/components/ThinkingView";
 import BrowserPreview from "@/components/BrowserPreview";
 import ModelSelectorModal from "@/components/ModelSelector";
+import FilePickerModal from "@/components/FilePickerModal";
 
 interface ToolActivity {
   id: string;
@@ -54,6 +55,17 @@ export default function FraidayWorkspace() {
   const [errorInfo, setErrorInfo] = useState<{ node?: string; message: string; error_type?: string } | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'planning' | 'context' | 'files' | 'artifacts'>('planning');
 
+  // --- SANDBOX WORKSPACE & CONVERSATION STATE ---
+  const [sandboxWorkspaces, setSandboxWorkspaces] = useState<any[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [sandboxConversations, setSandboxConversations] = useState<any[]>([]);
+  const [showNewWorkspaceInput, setShowNewWorkspaceInput] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [showNewConvoInput, setShowNewConvoInput] = useState(false);
+  const [newConvoTitle, setNewConvoTitle] = useState('');
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [splitPreviewWidth, setSplitPreviewWidth] = useState(50); // percentage
+
   // Fetch real workspace and runtime information from backend on mount
   useEffect(() => {
     const fetchWorkspace = async () => {
@@ -71,6 +83,78 @@ export default function FraidayWorkspace() {
     };
     fetchWorkspace();
   }, []);
+
+  // Fetch sandbox workspaces
+  const fetchSandboxWorkspaces = useCallback(async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/sandbox/workspaces');
+      if (res.ok) {
+        const data = await res.json();
+        setSandboxWorkspaces(data.workspaces || []);
+      }
+    } catch (e) {
+      console.warn('Sandbox API not reachable', e);
+    }
+  }, []);
+
+  useEffect(() => { fetchSandboxWorkspaces(); }, [fetchSandboxWorkspaces]);
+
+  // Fetch conversations for active workspace
+  useEffect(() => {
+    if (!activeWorkspaceId) { setSandboxConversations([]); return; }
+    const fetchConvos = async () => {
+      try {
+        const res = await fetch(`http://localhost:8000/api/sandbox/workspaces/${activeWorkspaceId}/conversations`);
+        if (res.ok) {
+          const data = await res.json();
+          setSandboxConversations(data.conversations || []);
+        }
+      } catch (e) { console.warn('Failed to fetch conversations', e); }
+    };
+    fetchConvos();
+  }, [activeWorkspaceId]);
+
+  const createSandboxWorkspace = async () => {
+    if (!newWorkspaceName.trim()) return;
+    try {
+      const res = await fetch('http://localhost:8000/api/sandbox/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newWorkspaceName.trim() })
+      });
+      if (res.ok) {
+        setNewWorkspaceName('');
+        setShowNewWorkspaceInput(false);
+        fetchSandboxWorkspaces();
+      }
+    } catch (e) { console.error('Failed to create workspace', e); }
+  };
+
+  const createSandboxConversation = async () => {
+    if (!newConvoTitle.trim() || !activeWorkspaceId) return;
+    try {
+      const res = await fetch(`http://localhost:8000/api/sandbox/workspaces/${activeWorkspaceId}/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newConvoTitle.trim() })
+      });
+      if (res.ok) {
+        setNewConvoTitle('');
+        setShowNewConvoInput(false);
+        // Refresh conversations
+        const convRes = await fetch(`http://localhost:8000/api/sandbox/workspaces/${activeWorkspaceId}/conversations`);
+        if (convRes.ok) {
+          const data = await convRes.json();
+          setSandboxConversations(data.conversations || []);
+        }
+      }
+    } catch (e) { console.error('Failed to create conversation', e); }
+  };
+
+  const handleAttachFiles = (files: { path: string; name: string }[]) => {
+    const newArts = files.map(f => ({ path: f.path, operation: 'attached', type: 'file' }));
+    setArtifacts(prev => [...prev, ...newArts]);
+  };
 
   // Thinking elapsed stopwatch
   useEffect(() => {
@@ -450,6 +534,85 @@ export default function FraidayWorkspace() {
               </div>
             </div>
 
+            {/* SANDBOX WORKSPACES */}
+            <div className="mb-4 pt-3 border-t border-neutral-800">
+              <div className="flex items-center justify-between text-neutral-500 font-mono text-[10px] uppercase font-bold tracking-wider mb-2 px-1">
+                <span>Sandbox Workspaces</span>
+                <button
+                  onClick={() => setShowNewWorkspaceInput(!showNewWorkspaceInput)}
+                  className="text-fra-yellow hover:text-white text-[12px] font-bold leading-none"
+                  title="Create new workspace"
+                >+</button>
+              </div>
+              {showNewWorkspaceInput && (
+                <div className="flex items-center space-x-1 mb-2 px-1">
+                  <input
+                    value={newWorkspaceName}
+                    onChange={e => setNewWorkspaceName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') createSandboxWorkspace(); }}
+                    placeholder="Workspace name..."
+                    className="flex-1 bg-neutral-900 border border-neutral-700 text-white text-[10px] px-1.5 py-1 font-mono focus:outline-none focus:border-fra-yellow"
+                    autoFocus
+                  />
+                  <button onClick={createSandboxWorkspace} className="text-[10px] bg-fra-yellow text-black font-bold px-1.5 py-1 border border-black">Go</button>
+                </div>
+              )}
+              <div className="space-y-0.5 text-[10px] font-mono">
+                {sandboxWorkspaces.map(ws => (
+                  <div key={ws.id}>
+                    <button
+                      className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                        activeWorkspaceId === ws.id ? 'bg-neutral-800 text-fra-yellow' : 'text-neutral-300 hover:text-white hover:bg-neutral-900'
+                      }`}
+                      onClick={() => setActiveWorkspaceId(activeWorkspaceId === ws.id ? null : ws.id)}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-neutral-500">[WS]</span>
+                        <span className="font-bold">{ws.name}</span>
+                      </span>
+                      <span className="text-[8px] bg-neutral-800 text-neutral-400 px-1 rounded">{ws.conversation_count} convos</span>
+                    </button>
+                    {activeWorkspaceId === ws.id && (
+                      <div className="pl-4 py-1 space-y-0.5">
+                        {sandboxConversations.map(conv => (
+                          <div key={conv.id} className="text-neutral-400 hover:text-white px-2 py-1 rounded hover:bg-neutral-900 cursor-pointer flex items-center justify-between">
+                            <span className="truncate">{conv.title}</span>
+                            <span className="text-[8px] text-neutral-600">{conv.message_count} msgs</span>
+                          </div>
+                        ))}
+                        {sandboxConversations.length === 0 && (
+                          <div className="text-neutral-600 italic px-2 py-1">No conversations yet</div>
+                        )}
+                        <div className="px-2 pt-1">
+                          {showNewConvoInput ? (
+                            <div className="flex items-center space-x-1">
+                              <input
+                                value={newConvoTitle}
+                                onChange={e => setNewConvoTitle(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') createSandboxConversation(); }}
+                                placeholder="Title..."
+                                className="flex-1 bg-neutral-900 border border-neutral-700 text-white text-[9px] px-1 py-0.5 font-mono focus:outline-none"
+                                autoFocus
+                              />
+                              <button onClick={createSandboxConversation} className="text-[9px] bg-fra-yellow text-black font-bold px-1 py-0.5 border border-black">+</button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setShowNewConvoInput(true)}
+                              className="text-[9px] text-fra-yellow hover:text-white font-bold"
+                            >+ New Conversation</button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {sandboxWorkspaces.length === 0 && (
+                  <div className="text-neutral-600 italic px-2 py-1">No sandbox workspaces yet.</div>
+                )}
+              </div>
+            </div>
+
             <div className="mb-4 pt-3 border-t border-neutral-800">
               <div className="text-neutral-500 font-mono text-[10px] uppercase font-bold tracking-wider mb-2 px-1">Control Center</div>
               <div className="space-y-0.5 text-[11px] font-mono">
@@ -480,7 +643,7 @@ export default function FraidayWorkspace() {
           {view === 'conversation' && (
             <div className="flex-1 flex overflow-hidden">
               {/* Chat Stream */}
-              <section className="flex-1 flex flex-col border-r-2 border-fra-black overflow-hidden bg-fra-cream">
+              <section className={`flex flex-col border-r-2 border-fra-black overflow-hidden bg-fra-cream ${previewOpen ? 'w-1/2' : 'flex-1'}`} style={previewOpen ? { width: `${100 - splitPreviewWidth}%` } : {}}>
                 
                 <div className="p-4 border-b-2 border-fra-black bg-fra-cream flex-shrink-0">
                   <div className="flex items-center justify-between mb-1.5">
@@ -531,15 +694,7 @@ export default function FraidayWorkspace() {
                       <div className="w-8 h-8 rounded bg-black flex-shrink-0 mr-3 flex items-center justify-center text-white font-bold text-sm">F_</div>
                       <div className="flex-1 space-y-4">
                         
-                        {/* Live Agentic Browser Preview Dock */}
-                        {previewOpen && (
-                          <BrowserPreview
-                            url={previewUrl}
-                            isOpen={previewOpen}
-                            onClose={() => setPreviewOpen(false)}
-                            title="frAIday Live Agentic Web Preview"
-                          />
-                        )}
+                        {/* Inline preview placeholder removed — preview is now in split pane */}
 
                         {/* Antigravity-Style Thoughts View */}
                         <ThinkingView
@@ -778,8 +933,21 @@ export default function FraidayWorkspace() {
                 </div>
               </section>
 
+              {/* Split-View Live Browser Preview */}
+              {previewOpen && (
+                <section className="flex flex-col border-r-2 border-fra-black overflow-hidden bg-neutral-100" style={{ width: `${splitPreviewWidth}%` }}>
+                  <BrowserPreview
+                    url={previewUrl}
+                    isOpen={previewOpen}
+                    onClose={() => setPreviewOpen(false)}
+                    title="Live Preview"
+                    embedded={true}
+                  />
+                </section>
+              )}
+
               {/* RightInspectorPanel */}
-              <aside className="w-96 bg-fra-cream border-l-2 border-fra-black flex flex-col overflow-y-auto select-none font-mono flex-shrink-0">
+              <aside className={`bg-fra-cream border-l-2 border-fra-black flex flex-col overflow-y-auto select-none font-mono flex-shrink-0 ${previewOpen ? 'w-72' : 'w-96'}`}>
                 <div className="grid grid-cols-4 border-b-2 border-fra-black text-[11px] font-bold text-center">
                   <button 
                     className={`py-2.5 border-r-2 border-fra-black font-extrabold transition-colors ${
@@ -1074,17 +1242,31 @@ export default function FraidayWorkspace() {
                   {inspectorTab === 'artifacts' && (
                     <div className="space-y-3">
                       <div className="border-2 border-fra-black bg-white p-3 shadow-brutal">
-                        <div className="font-bold text-[11px] uppercase tracking-wider mb-2">RUN ARTIFACTS</div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-bold text-[11px] uppercase tracking-wider">RUN ARTIFACTS</span>
+                          <button
+                            onClick={() => setFilePickerOpen(true)}
+                            className="text-[9px] bg-fra-yellow text-black font-bold px-2 py-0.5 border-2 border-black shadow-brutal-sm hover:bg-yellow-400 flex items-center space-x-1"
+                          >
+                            <span>+</span><span>Add File</span>
+                          </button>
+                        </div>
                         {artifacts.length === 0 ? (
-                          <div className="text-[10px] text-neutral-400 italic">No artifacts generated yet.</div>
+                          <div className="text-[10px] text-neutral-400 italic">No artifacts generated yet. Click "Add File" to attach workspace files.</div>
                         ) : (
                           <div className="space-y-1.5 text-[10px]">
-                            {artifacts.map((art, idx) => (
-                              <div key={idx} className="flex items-center justify-between border border-black bg-white p-1.5">
-                                <span className="font-bold truncate max-w-[180px]">{art.path}</span>
-                                <div className="flex items-center space-x-1">
-                                  <span className="text-[9px] uppercase font-bold bg-fra-yellow px-1 border border-black">{art.operation}</span>
-                                  {(art.path?.endsWith('.html') || art.path?.endsWith('.htm')) && (
+                            {artifacts.map((art, idx) => {
+                              const isDoc = ['.pdf', '.odf', '.md', '.docx', '.doc', '.txt', '.csv'].some(ext => art.path?.endsWith(ext));
+                              return (
+                                <div key={idx} className="flex items-center justify-between border border-black bg-white p-1.5">
+                                  <span className="font-bold truncate max-w-[150px]" title={art.path}>{art.path}</span>
+                                  <div className="flex items-center space-x-1">
+                                    {isDoc && (
+                                      <span className="text-[8px] bg-blue-100 text-blue-800 border border-blue-300 px-1 font-bold">DOC</span>
+                                    )}
+                                    <span className={`text-[9px] uppercase font-bold px-1 border border-black ${
+                                      art.operation === 'attached' ? 'bg-blue-200 text-blue-900' : 'bg-fra-yellow text-black'
+                                    }`}>{art.operation}</span>
                                     <button
                                       onClick={() => {
                                         setPreviewUrl(`http://localhost:8000/api/preview/${art.path}`);
@@ -1094,10 +1276,10 @@ export default function FraidayWorkspace() {
                                     >
                                       PREVIEW ↗
                                     </button>
-                                  )}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -1250,6 +1432,13 @@ export default function FraidayWorkspace() {
           setProvider(p);
           setModelSelectorOpen(false);
         }}
+      />
+
+      {/* File Picker Modal for Artifacts */}
+      <FilePickerModal
+        isOpen={filePickerOpen}
+        onClose={() => setFilePickerOpen(false)}
+        onSelect={handleAttachFiles}
       />
     </>
   );

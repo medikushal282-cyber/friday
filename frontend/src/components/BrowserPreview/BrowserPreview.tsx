@@ -7,18 +7,21 @@ interface BrowserPreviewProps {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
+  embedded?: boolean; // When true, renders without fixed height for split-view embedding
 }
 
 export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
   url,
   isOpen,
   onClose,
-  title = "frAIday Live Browser Preview"
+  title = "frAIday Live Browser Preview",
+  embedded = false,
 }) => {
   const [deviceMode, setDeviceMode] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [iframeKey, setIframeKey] = useState<number>(1);
   const [currentUrl, setCurrentUrl] = useState<string>(url);
   const [inputUrl, setInputUrl] = useState<string>(url);
+  const [zoom, setZoom] = useState<number>(100);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   React.useEffect(() => {
@@ -59,31 +62,33 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
     }
   };
 
+  const zoomLevels = [50, 75, 100, 125, 150];
+
   return (
-    <div className="border-2 border-fra-black bg-white shadow-brutal flex flex-col h-[560px] mb-4 overflow-hidden select-none">
+    <div className={`border-2 border-fra-black bg-white shadow-brutal flex flex-col overflow-hidden select-none ${embedded ? 'h-full' : 'h-[560px] mb-4'}`}>
       {/* Browser Chrome Header */}
-      <div className="bg-[#0A0A0A] text-white px-3 py-2 border-b-2 border-black flex items-center justify-between gap-3">
+      <div className="bg-[#0A0A0A] text-white px-3 py-2 border-b-2 border-black flex items-center justify-between gap-2 flex-shrink-0">
         {/* Left Window Controls & Title */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 flex-shrink-0">
           <div className="flex items-center space-x-1.5 mr-1">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>
             <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 inline-block"></span>
             <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block"></span>
           </div>
-          <span className="font-mono font-bold text-[11px] text-neutral-300 hidden sm:inline">
+          <span className="font-mono font-bold text-[10px] text-neutral-300 hidden lg:inline">
             {title}
           </span>
         </div>
 
         {/* Center URL Address Bar */}
-        <form onSubmit={handleNavigate} className="flex-1 max-w-xl mx-auto flex items-center bg-[#171717] border border-neutral-700 px-2 py-1 rounded text-xs font-mono text-neutral-200">
+        <form onSubmit={handleNavigate} className="flex-1 max-w-md mx-auto flex items-center bg-[#171717] border border-neutral-700 px-2 py-1 rounded text-xs font-mono text-neutral-200">
           <span className="text-neutral-500 mr-1.5 text-[10px]">🔒</span>
           <input
             type="text"
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
-            className="flex-1 bg-transparent text-[11px] text-fra-yellow focus:outline-none font-mono"
-            placeholder="Type file name (e.g. index.html, main.py) or URL..."
+            className="flex-1 bg-transparent text-[10px] text-fra-yellow focus:outline-none font-mono"
+            placeholder="Type file name or URL..."
           />
           <button type="submit" className="text-[10px] text-neutral-400 hover:text-white ml-1 px-1 font-bold">
             GO
@@ -95,64 +100,56 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
         </form>
 
         {/* Right Action Tools */}
-        <div className="flex items-center space-x-1.5 text-xs font-mono">
-          {/* Reload Button */}
-          <button
-            onClick={handleReload}
-            className="border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-white px-2 py-0.5 text-[11px] flex items-center gap-1"
-            title="Reload Frame"
-          >
-            <span>↻</span>
-          </button>
+        <div className="flex items-center space-x-1 text-xs font-mono flex-shrink-0">
+          {/* Reload */}
+          <button onClick={handleReload} className="border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-white px-1.5 py-0.5 text-[10px]" title="Reload">↻</button>
 
-          {/* Device Switcher */}
-          <div className="hidden lg:flex items-center border border-neutral-700 bg-neutral-900 text-[10px]">
+          {/* Zoom Controls */}
+          <div className="hidden md:flex items-center border border-neutral-700 bg-neutral-900 text-[9px]">
             <button
-              onClick={() => setDeviceMode('desktop')}
-              className={`px-1.5 py-0.5 ${deviceMode === 'desktop' ? 'bg-fra-yellow text-black font-bold' : 'text-neutral-400'}`}
-              title="Desktop View"
-            >
-              Desktop
-            </button>
+              onClick={() => setZoom(prev => Math.max(50, prev - 25))}
+              className="px-1 py-0.5 text-neutral-400 hover:text-white"
+              title="Zoom Out"
+            >−</button>
+            <span className="px-1 py-0.5 text-fra-yellow font-bold border-x border-neutral-700 min-w-[36px] text-center">{zoom}%</span>
             <button
-              onClick={() => setDeviceMode('tablet')}
-              className={`px-1.5 py-0.5 ${deviceMode === 'tablet' ? 'bg-fra-yellow text-black font-bold' : 'text-neutral-400'}`}
-              title="Tablet View"
-            >
-              Tablet
-            </button>
-            <button
-              onClick={() => setDeviceMode('mobile')}
-              className={`px-1.5 py-0.5 ${deviceMode === 'mobile' ? 'bg-fra-yellow text-black font-bold' : 'text-neutral-400'}`}
-              title="Mobile View"
-            >
-              Mobile
-            </button>
+              onClick={() => setZoom(prev => Math.min(150, prev + 25))}
+              className="px-1 py-0.5 text-neutral-400 hover:text-white"
+              title="Zoom In"
+            >+</button>
           </div>
 
-          {/* Open in New Browser Tab Button */}
+          {/* Device Switcher */}
+          <div className="hidden lg:flex items-center border border-neutral-700 bg-neutral-900 text-[9px]">
+            <button onClick={() => setDeviceMode('desktop')} className={`px-1.5 py-0.5 ${deviceMode === 'desktop' ? 'bg-fra-yellow text-black font-bold' : 'text-neutral-400'}`}>🖥</button>
+            <button onClick={() => setDeviceMode('tablet')} className={`px-1.5 py-0.5 ${deviceMode === 'tablet' ? 'bg-fra-yellow text-black font-bold' : 'text-neutral-400'}`}>📱</button>
+            <button onClick={() => setDeviceMode('mobile')} className={`px-1.5 py-0.5 ${deviceMode === 'mobile' ? 'bg-fra-yellow text-black font-bold' : 'text-neutral-400'}`}>📲</button>
+          </div>
+
+          {/* Open in Tab */}
           <button
             onClick={handleOpenNewTab}
-            className="border-2 border-black bg-fra-yellow text-black font-bold text-[10px] px-2.5 py-1 flex items-center space-x-1 shadow-brutal-sm hover:bg-yellow-400 uppercase tracking-wider"
+            className="border-2 border-black bg-fra-yellow text-black font-bold text-[9px] px-2 py-0.5 flex items-center space-x-1 shadow-brutal-sm hover:bg-yellow-400 uppercase"
           >
-            <span>Open in Tab</span>
-            <span>↗</span>
+            <span>Tab</span><span>↗</span>
           </button>
 
-          {/* Close Dock Button */}
-          <button
-            onClick={onClose}
-            className="text-neutral-400 hover:text-white px-1.5 text-sm font-bold"
-            title="Close Preview"
-          >
-            ✕
-          </button>
+          {/* Close */}
+          <button onClick={onClose} className="text-neutral-400 hover:text-white px-1 text-sm font-bold" title="Close Preview">✕</button>
         </div>
       </div>
 
       {/* Frame Container */}
-      <div className="flex-1 bg-neutral-100 flex items-center justify-center overflow-hidden p-2">
-        <div className={`h-full ${getContainerWidth()} mx-auto transition-all duration-300 border-2 border-neutral-300 bg-white shadow-md flex flex-col overflow-hidden`}>
+      <div className="flex-1 bg-neutral-100 flex items-start justify-center overflow-auto p-1">
+        <div
+          className={`${getContainerWidth()} mx-auto border border-neutral-300 bg-white shadow-md flex flex-col overflow-hidden`}
+          style={{
+            transform: `scale(${zoom / 100})`,
+            transformOrigin: 'top center',
+            height: `${10000 / zoom}%`,
+            minHeight: embedded ? '100%' : '500px',
+          }}
+        >
           <iframe
             key={iframeKey}
             ref={iframeRef}
@@ -168,3 +165,4 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
 };
 
 export default BrowserPreview;
+
