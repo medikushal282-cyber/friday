@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import LatticeLoader from "@/components/LatticeLoader";
 import ThinkingView, { ThoughtItem } from "@/components/ThinkingView";
 import BrowserPreview from "@/components/BrowserPreview";
@@ -15,7 +15,21 @@ interface ToolActivity {
   timestamp: string;
 }
 
+
+const DragHandle = ({ onDrag, className = "" }: { onDrag: (delta: number) => void; className?: string }) => {
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const onMouseMove = (ev: MouseEvent) => onDrag(ev.clientX - startX);
+    const onMouseUp = () => { document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mouseup', onMouseUp); };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+  return <div className={`w-1 cursor-col-resize bg-transparent hover:bg-fra-yellow/50 active:bg-fra-yellow transition-colors flex-shrink-0 ${className}`} onMouseDown={handleMouseDown} />;
+};
+
 export default function FraidayWorkspace() {
+
   const [view, setView] = useState("conversation");
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspace, setWorkspace] = useState("Fraiday");
@@ -37,6 +51,22 @@ export default function FraidayWorkspace() {
   const [commandModalOpen, setCommandModalOpen] = useState(false);
   const [switches, setSwitches] = useState({ web: true, kb: true, tools: true });
   
+  // Helper to ensure preview URLs are relative to workspace root
+  const getRelativePreviewUrl = (targetPath: string) => {
+    if (!targetPath) return "http://localhost:8000/api/preview/index.html";
+    let rel = targetPath;
+    if (workspaceRoot && rel.startsWith(workspaceRoot)) {
+      rel = rel.substring(workspaceRoot.length);
+      if (rel.startsWith('/') || rel.startsWith('\\')) rel = rel.substring(1);
+    }
+    // Also strip C:\... if it somehow didn't match workspaceRoot exactly
+    if (rel.match(/^[a-zA-Z]:\\/)) {
+      const parts = rel.split(/[\\/]/);
+      rel = parts[parts.length - 1];
+    }
+    return `http://localhost:8000/api/preview/${rel}`;
+  };
+
   const [inputVal, setInputVal] = useState("");
 
   // --- PHASE 4.6 RUN STATE & ACTIVITY STREAM ---
@@ -55,16 +85,26 @@ export default function FraidayWorkspace() {
   const [errorInfo, setErrorInfo] = useState<{ node?: string; message: string; error_type?: string } | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'planning' | 'context' | 'files' | 'artifacts'>('planning');
 
+  // --- CONTIGUOUS CHAT HISTORY ---
+  const [chatHistory, setChatHistory] = useState<{role: string; content: string; timestamp?: string; metadata?: any}[]>([]);
+  const [contextSummary, setContextSummary] = useState<string>('');
+
   // --- SANDBOX WORKSPACE & CONVERSATION STATE ---
   const [sandboxWorkspaces, setSandboxWorkspaces] = useState<any[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [sandboxConversations, setSandboxConversations] = useState<any[]>([]);
   const [showNewWorkspaceInput, setShowNewWorkspaceInput] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [showNewConvoInput, setShowNewConvoInput] = useState(false);
   const [newConvoTitle, setNewConvoTitle] = useState('');
   const [filePickerOpen, setFilePickerOpen] = useState(false);
-  const [splitPreviewWidth, setSplitPreviewWidth] = useState(50); // percentage
+  const [splitPreviewWidth, setSplitPreviewWidth] = useState(400);
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState(256);
+  const [rightInspectorWidth, setRightInspectorWidth] = useState(384);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch real workspace and runtime information from backend on mount
   useEffect(() => {
@@ -90,12 +130,16 @@ export default function FraidayWorkspace() {
       const res = await fetch('http://localhost:8000/api/sandbox/workspaces');
       if (res.ok) {
         const data = await res.json();
-        setSandboxWorkspaces(data.workspaces || []);
+        const list = data.workspaces || [];
+        setSandboxWorkspaces(list);
+        if (list.length > 0 && !activeWorkspaceId) {
+          setActiveWorkspaceId(list[0].id);
+        }
       }
     } catch (e) {
       console.warn('Sandbox API not reachable', e);
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
   useEffect(() => { fetchSandboxWorkspaces(); }, [fetchSandboxWorkspaces]);
 
@@ -107,7 +151,11 @@ export default function FraidayWorkspace() {
         const res = await fetch(`http://localhost:8000/api/sandbox/workspaces/${activeWorkspaceId}/conversations`);
         if (res.ok) {
           const data = await res.json();
-          setSandboxConversations(data.conversations || []);
+          const convs = data.conversations || [];
+          setSandboxConversations(convs);
+          if (convs.length > 0 && !activeConversationId) {
+            loadConversation(activeWorkspaceId, convs[0].id);
+          }
         }
       } catch (e) { console.warn('Failed to fetch conversations', e); }
     };
@@ -123,9 +171,13 @@ export default function FraidayWorkspace() {
         body: JSON.stringify({ name: newWorkspaceName.trim() })
       });
       if (res.ok) {
+        const data = await res.json();
         setNewWorkspaceName('');
         setShowNewWorkspaceInput(false);
-        fetchSandboxWorkspaces();
+        await fetchSandboxWorkspaces();
+        if (data.workspace?.id) {
+          setActiveWorkspaceId(data.workspace.id);
+        }
       }
     } catch (e) { console.error('Failed to create workspace', e); }
   };
@@ -139,13 +191,16 @@ export default function FraidayWorkspace() {
         body: JSON.stringify({ title: newConvoTitle.trim() })
       });
       if (res.ok) {
+        const data = await res.json();
         setNewConvoTitle('');
         setShowNewConvoInput(false);
-        // Refresh conversations
         const convRes = await fetch(`http://localhost:8000/api/sandbox/workspaces/${activeWorkspaceId}/conversations`);
         if (convRes.ok) {
-          const data = await convRes.json();
-          setSandboxConversations(data.conversations || []);
+          const cData = await convRes.json();
+          setSandboxConversations(cData.conversations || []);
+        }
+        if (data.conversation?.id) {
+          loadConversation(activeWorkspaceId, data.conversation.id);
         }
       }
     } catch (e) { console.error('Failed to create conversation', e); }
@@ -154,6 +209,57 @@ export default function FraidayWorkspace() {
   const handleAttachFiles = (files: { path: string; name: string }[]) => {
     const newArts = files.map(f => ({ path: f.path, operation: 'attached', type: 'file' }));
     setArtifacts(prev => [...prev, ...newArts]);
+  };
+
+  // Persist a message to the active conversation
+  const persistMessage = async (role: string, content: string, metadata?: any) => {
+    if (!activeWorkspaceId || !activeConversationId) return;
+    try {
+      await fetch(`http://localhost:8000/api/sandbox/workspaces/${activeWorkspaceId}/conversations/${activeConversationId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, content, metadata })
+      });
+    } catch (e) { console.warn('Failed to persist message', e); }
+  };
+
+  // Load a conversation's messages and context
+  const loadConversation = async (wsId: string, convId: string) => {
+    setActiveWorkspaceId(wsId);
+    setActiveConversationId(convId);
+    try {
+      const res = await fetch(`http://localhost:8000/api/sandbox/workspaces/${wsId}/conversations/${convId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setChatHistory(data.messages || []);
+        setContextSummary(data.context_summary || '');
+      }
+    } catch (e) { console.warn('Failed to load conversation', e); }
+    // Reset run state but keep history
+    setRunId(null); setRunStatus('idle'); setRunObjective('');
+    setPlanSteps([]); setNodes({}); setActivityStream([]);
+    setThoughts([]); setValidationResult(null); setFinalResult(null); setErrorInfo(null);
+  };
+
+  // Delete workspace
+  const deleteSandboxWorkspace = async (wsId: string) => {
+    try {
+      await fetch(`http://localhost:8000/api/sandbox/workspaces/${wsId}`, { method: 'DELETE' });
+      if (activeWorkspaceId === wsId) { setActiveWorkspaceId(null); setActiveConversationId(null); setChatHistory([]); }
+      fetchSandboxWorkspaces();
+    } catch (e) { console.error('Failed to delete workspace', e); }
+  };
+
+  // Delete conversation
+  const deleteSandboxConversation = async (wsId: string, convId: string) => {
+    try {
+      await fetch(`http://localhost:8000/api/sandbox/workspaces/${wsId}/conversations/${convId}`, { method: 'DELETE' });
+      if (activeConversationId === convId) { setActiveConversationId(null); setChatHistory([]); }
+      // Refresh
+      const res = await fetch(`http://localhost:8000/api/sandbox/workspaces/${wsId}/conversations`);
+      if (res.ok) { const d = await res.json(); setSandboxConversations(d.conversations || []); }
+      fetchSandboxWorkspaces();
+    } catch (e) { console.error('Failed to delete conversation', e); }
   };
 
   // Thinking elapsed stopwatch
@@ -185,6 +291,24 @@ export default function FraidayWorkspace() {
     
     const objective = inputVal;
     setInputVal("");
+
+    // Read attached files as text before clearing
+    const fileAttachments: {name: string; content: string; size: number}[] = [];
+    if (attachedFiles.length > 0) {
+      for (const file of attachedFiles) {
+        try {
+          const text = await file.text();
+          fileAttachments.push({ name: file.name, content: text, size: file.size });
+        } catch { /* skip binary files */ }
+      }
+      setAttachedFiles([]);
+    }
+
+    // Add user message to contiguous chat history
+    const attachNote = fileAttachments.length > 0 ? `\n[Attached: ${fileAttachments.map(f => f.name).join(', ')}]` : '';
+    const userMsg = { role: 'user', content: objective + attachNote, timestamp: new Date().toISOString() };
+    setChatHistory(prev => [...prev, userMsg]);
+
     setRunId(null);
     setRunStatus('starting');
     setRunObjective(objective);
@@ -206,7 +330,14 @@ export default function FraidayWorkspace() {
       const res = await fetch('http://localhost:8000/api/runs/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ objective, model, provider })
+        body: JSON.stringify({
+          objective,
+          model,
+          provider,
+          workspace_id: activeWorkspaceId,
+          conversation_id: activeConversationId,
+          attachments: fileAttachments.length > 0 ? fileAttachments : undefined
+        })
       });
       
       if (!res.ok) throw new Error('Failed to start run');
@@ -214,6 +345,7 @@ export default function FraidayWorkspace() {
       setRunId(data.run_id);
       setRunStatus('running');
       
+      let latestChatText = '';
       const evtSource = new EventSource(`http://localhost:8000/api/runs/${data.run_id}/events`);
       
       evtSource.onmessage = async (event) => {
@@ -223,7 +355,8 @@ export default function FraidayWorkspace() {
           
           if (type === 'chat_response') {
             setRunType('chat');
-            setChatMessage(eventData.text || '');
+            latestChatText = eventData.text || '';
+            setChatMessage(latestChatText);
           } else if (type === 'thought_generated' || type === 'thought') {
             setThoughts(prev => [...prev, eventData]);
           } else if (type === 'browser_opened') {
@@ -236,6 +369,9 @@ export default function FraidayWorkspace() {
               detail: `Root: ${eventData.workspace?.root_path || workspaceRoot} | History turns: ${eventData.conversation_turns || 0}`,
               status: 'completed'
             });
+            if (eventData.context_summary) {
+              setContextSummary(eventData.context_summary);
+            }
           } else if (type === 'node_started') {
             setNodes(prev => ({ ...prev, [node]: 'running' }));
           } else if (type === 'node_completed') {
@@ -277,7 +413,7 @@ export default function FraidayWorkspace() {
             setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
             setArtifacts(prev => [...prev, { path: eventData.path, operation: 'created', type: 'file' }]);
             if (eventData.path && (eventData.path.endsWith('.html') || eventData.path.endsWith('.htm'))) {
-              setPreviewUrl(`http://localhost:8000/api/preview/${eventData.path}`);
+              setPreviewUrl(getRelativePreviewUrl(eventData.path));
               setPreviewOpen(true);
             }
             addActivity({
@@ -290,7 +426,7 @@ export default function FraidayWorkspace() {
             setRelevantFiles(prev => Array.from(new Set([...prev, eventData.path])));
             setArtifacts(prev => [...prev, { path: eventData.path, operation: 'updated', type: 'file' }]);
             if (eventData.path && (eventData.path.endsWith('.html') || eventData.path.endsWith('.htm'))) {
-              setPreviewUrl(`http://localhost:8000/api/preview/${eventData.path}`);
+              setPreviewUrl(getRelativePreviewUrl(eventData.path));
             }
             addActivity({
               type: 'CRUD',
@@ -340,16 +476,45 @@ export default function FraidayWorkspace() {
             evtSource.close();
             setRunStatus('completed');
             
+            let finalState: any = {};
             try {
               const finalRes = await fetch(`http://localhost:8000/api/runs/${data.run_id}`);
               if (finalRes.ok) {
                 const finalData = await finalRes.json();
-                setFinalResult(finalData.state || {});
-                if (finalData.state?.artifacts) setArtifacts(finalData.state.artifacts);
+                finalState = finalData.state || {};
+                setFinalResult(finalState);
+                if (finalState.artifacts) setArtifacts(finalState.artifacts);
               }
             } catch (e) {
               console.error(e);
             }
+
+            // Sync contiguous chat history and context memory from backend
+            if (activeWorkspaceId && activeConversationId) {
+              try {
+                const convRes = await fetch(`http://localhost:8000/api/sandbox/workspaces/${activeWorkspaceId}/conversations/${activeConversationId}`);
+                if (convRes.ok) {
+                  const convData = await convRes.json();
+                  if (convData.messages && convData.messages.length > 0) {
+                    setChatHistory(convData.messages);
+                  } else {
+                    // Fallback local append
+                    let assistantContent = latestChatText || `Completed execution for: "${objective}"`;
+                    setChatHistory(prev => [...prev, { role: 'assistant', content: assistantContent, timestamp: new Date().toISOString() }]);
+                  }
+                  if (convData.context_summary) {
+                    setContextSummary(convData.context_summary);
+                  }
+                }
+              } catch (e) {
+                let assistantContent = latestChatText || `Completed execution for: "${objective}"`;
+                setChatHistory(prev => [...prev, { role: 'assistant', content: assistantContent, timestamp: new Date().toISOString() }]);
+              }
+            } else {
+              let assistantContent = latestChatText || `Completed execution for: "${objective}"`;
+              setChatHistory(prev => [...prev, { role: 'assistant', content: assistantContent, timestamp: new Date().toISOString() }]);
+            }
+
           } else if (type === 'run_failed') {
             evtSource.close();
             setRunStatus('failed');
@@ -404,11 +569,6 @@ export default function FraidayWorkspace() {
         setModeMenuOpen(false);
         setModelMenuOpen(false);
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        if (inputVal.trim()) {
-          startRun();
-        }
-      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -419,6 +579,9 @@ export default function FraidayWorkspace() {
   };
 
   const createNewConversation = () => {
+    setChatHistory([]);
+    setContextSummary('');
+    setActiveConversationId(null);
     setRunId(null);
     setRunStatus('idle');
     setRunObjective('');
@@ -492,7 +655,7 @@ export default function FraidayWorkspace() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* LeftSidebar */}
-        <aside className="w-64 bg-fra-sidebar text-white border-r-2 border-fra-black flex flex-col justify-between flex-shrink-0 select-none z-20">
+        <aside className="bg-fra-sidebar text-white flex flex-col justify-between flex-shrink-0 select-none z-20" style={{ width: leftSidebarWidth }}>
           <div className="overflow-y-auto dark-scroll p-3 flex-1">
             <button className="w-full bg-fra-yellow text-fra-black font-extrabold text-[12px] py-2 px-3 border-2 border-black flex items-center justify-center space-x-2 shadow-brutal hover:bg-fra-yellow-hover transition-all mb-4" onClick={createNewConversation}>
               <span className="text-base leading-none font-black">+</span>
@@ -560,24 +723,30 @@ export default function FraidayWorkspace() {
               <div className="space-y-0.5 text-[10px] font-mono">
                 {sandboxWorkspaces.map(ws => (
                   <div key={ws.id}>
-                    <button
-                      className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
-                        activeWorkspaceId === ws.id ? 'bg-neutral-800 text-fra-yellow' : 'text-neutral-300 hover:text-white hover:bg-neutral-900'
-                      }`}
-                      onClick={() => setActiveWorkspaceId(activeWorkspaceId === ws.id ? null : ws.id)}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-neutral-500">[WS]</span>
-                        <span className="font-bold">{ws.name}</span>
-                      </span>
-                      <span className="text-[8px] bg-neutral-800 text-neutral-400 px-1 rounded">{ws.conversation_count} convos</span>
-                    </button>
+                    <div className="flex items-center justify-between group">
+                      <button
+                        className={`flex-1 text-left px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                          activeWorkspaceId === ws.id ? 'bg-neutral-800 text-fra-yellow' : 'text-neutral-300 hover:text-white hover:bg-neutral-900'
+                        }`}
+                        onClick={() => setActiveWorkspaceId(activeWorkspaceId === ws.id ? null : ws.id)}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-neutral-500">[WS]</span>
+                          <span className="font-bold">{ws.name}</span>
+                        </span>
+                        <span className="text-[8px] bg-neutral-800 text-neutral-400 px-1 rounded">{ws.conversation_count}</span>
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); deleteSandboxWorkspace(ws.id); }} className="text-[9px] text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 font-bold ml-1 px-1">✕</button>
+                    </div>
                     {activeWorkspaceId === ws.id && (
                       <div className="pl-4 py-1 space-y-0.5">
                         {sandboxConversations.map(conv => (
-                          <div key={conv.id} className="text-neutral-400 hover:text-white px-2 py-1 rounded hover:bg-neutral-900 cursor-pointer flex items-center justify-between">
-                            <span className="truncate">{conv.title}</span>
-                            <span className="text-[8px] text-neutral-600">{conv.message_count} msgs</span>
+                          <div key={conv.id} className={`px-2 py-1 rounded cursor-pointer flex items-center justify-between group ${activeConversationId === conv.id ? 'bg-neutral-800 text-fra-yellow' : 'text-neutral-400 hover:text-white hover:bg-neutral-900'}`}>
+                            <span className="truncate" onClick={() => loadConversation(ws.id, conv.id)}>{conv.title}</span>
+                            <div className="flex items-center space-x-1">
+                              <span className="text-[8px] text-neutral-600">{conv.message_count}</span>
+                              <button onClick={(e) => { e.stopPropagation(); deleteSandboxConversation(ws.id, conv.id); }} className="text-[9px] text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 font-bold">✕</button>
+                            </div>
                           </div>
                         ))}
                         {sandboxConversations.length === 0 && (
@@ -656,40 +825,74 @@ export default function FraidayWorkspace() {
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                  {runObjective && (
-                    <div className="flex items-start justify-end max-w-2xl ml-auto">
-                      <div className="bg-white border-2 border-fra-black p-3 shadow-brutal text-sm text-black font-mono">
-                        {runObjective}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {/* Context Memory Banner */}
+                  {contextSummary ? (
+                    <div className="bg-white border-2 border-fra-black p-3 shadow-brutal text-[11px] font-mono flex items-start gap-2.5">
+                      <div className="bg-fra-yellow text-black font-extrabold px-1.5 py-0.5 text-[9px] border border-black uppercase flex-shrink-0">
+                        Context Memory
+                      </div>
+                      <div className="flex-1 text-black font-medium leading-relaxed">
+                        {contextSummary}
+                      </div>
+                      <div className="text-[8px] font-bold bg-neutral-100 text-neutral-600 px-1.5 py-0.5 border border-neutral-300 uppercase flex-shrink-0">
+                        Llama-3.1-8B-Instant
+                      </div>
+                    </div>
+                  ) : (
+                    activeWorkspaceId && activeConversationId && (
+                      <div className="bg-neutral-100 border border-neutral-300 px-3 py-1.5 text-[10px] font-mono text-neutral-600 flex items-center justify-between">
+                        <span>Workspace: <strong className="text-black">{activeWorkspaceId}</strong> | Session Context Active</span>
+                        <span className="text-[8px] bg-neutral-200 px-1.5 py-0.5 font-bold uppercase">Llama-3.1-8B-Instant</span>
+                      </div>
+                    )
+                  )}
+
+                  {/* Contiguous Chat History */}
+                  {chatHistory.map((msg, idx) => (
+                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} max-w-3xl ${msg.role === 'user' ? 'ml-auto' : ''}`}>
+                      {msg.role !== 'user' && (
+                        <div className="w-7 h-7 rounded bg-black flex-shrink-0 mr-2 flex items-center justify-center text-white font-bold text-[10px]">F_</div>
+                      )}
+                      <div className={`p-3 text-[12px] font-mono max-w-[80%] ${
+                        msg.role === 'user'
+                          ? 'bg-white border-2 border-fra-black shadow-brutal text-black'
+                          : 'bg-neutral-50 border border-neutral-300 text-neutral-800'
+                      }`}>
+                        <div className="whitespace-pre-wrap">{msg.content}</div>
+                        {msg.timestamp && <div className="text-[8px] text-neutral-400 mt-1">{new Date(msg.timestamp).toLocaleTimeString()}</div>}
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Active running stream for conversational chat (ONLY while active to avoid duplicate answers) */}
+                  {(runStatus === 'running' || runStatus === 'starting') && runType === 'chat' && (
+                    <div className="flex items-start max-w-3xl animate-in fade-in duration-200">
+                      <div className="w-8 h-8 rounded bg-black flex-shrink-0 mr-3 flex items-center justify-center text-white font-bold text-sm">F_</div>
+                      <div className="flex-1 space-y-3">
+                        {thoughts.length > 0 && (
+                          <ThinkingView
+                            thoughts={thoughts}
+                            isThinking={true}
+                            elapsedSeconds={thinkingElapsed}
+                            activeModel={`${model} (${provider.toUpperCase()})`}
+                          />
+                        )}
+
+                        <div className="bg-white border-2 border-fra-black shadow-brutal p-4 text-sm font-sans leading-relaxed text-black whitespace-pre-wrap">
+                          {chatMessage || (
+                            <div className="flex items-center space-x-2 text-neutral-500 font-mono text-xs">
+                              <span className="w-2 h-2 rounded-full bg-fra-yellow animate-ping" />
+                              <span>frAIday is thinking...</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
 
-                  {(runStatus !== 'idle') && (
-                    runType === 'chat' ? (
-                      <div className="flex items-start max-w-3xl animate-in fade-in duration-200">
-                        <div className="w-8 h-8 rounded bg-black flex-shrink-0 mr-3 flex items-center justify-center text-white font-bold text-sm">F_</div>
-                        <div className="flex-1 space-y-3">
-                          {thoughts.length > 0 && (
-                            <ThinkingView
-                              thoughts={thoughts}
-                              isThinking={runStatus === 'running' || runStatus === 'starting'}
-                              elapsedSeconds={thinkingElapsed}
-                              activeModel={`${model} (${provider.toUpperCase()})`}
-                            />
-                          )}
-
-                          <div className="bg-white border-2 border-fra-black shadow-brutal p-4 text-sm font-sans leading-relaxed text-black whitespace-pre-wrap">
-                            {chatMessage || (
-                              <div className="flex items-center space-x-2 text-neutral-500 font-mono text-xs">
-                                <span className="w-2 h-2 rounded-full bg-fra-yellow animate-ping" />
-                                <span>frAIday is thinking...</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
+                  {/* Current active run UI for execution workflows */}
+                  {(runStatus !== 'idle') && runType === 'execution' && (
                     <div className="flex items-start max-w-4xl">
                       <div className="w-8 h-8 rounded bg-black flex-shrink-0 mr-3 flex items-center justify-center text-white font-bold text-sm">F_</div>
                       <div className="flex-1 space-y-4">
@@ -778,7 +981,7 @@ export default function FraidayWorkspace() {
                                     onClick={() => {
                                       const htmlArt = artifacts.find(a => a.path?.endsWith('.html') || a.path?.endsWith('.htm'));
                                       if (htmlArt) {
-                                        setPreviewUrl(`http://localhost:8000/api/preview/${htmlArt.path}`);
+                                        setPreviewUrl(getRelativePreviewUrl(htmlArt.path));
                                         setPreviewOpen(true);
                                       }
                                     }}
@@ -798,7 +1001,7 @@ export default function FraidayWorkspace() {
                                       <button
                                         key={idx}
                                         onClick={() => {
-                                          setPreviewUrl(`http://localhost:8000/api/preview/${a.path}`);
+                                          setPreviewUrl(getRelativePreviewUrl(a.path));
                                           setPreviewOpen(true);
                                         }}
                                         className="bg-neutral-100 hover:bg-fra-yellow border border-neutral-300 hover:border-black px-2 py-0.5 text-[10px] font-bold text-neutral-800 transition-colors flex items-center space-x-1 shadow-sm"
@@ -824,12 +1027,20 @@ export default function FraidayWorkspace() {
                         </div>
                       </div>
                     </div>
-                    )
                   )}
                 </div>
 
                 {/* BottomPromptDock */}
-                <div className="p-3 border-t-2 border-fra-black bg-fra-cream flex-shrink-0">
+                <div
+                  className={`p-3 border-t-2 border-fra-black bg-fra-cream flex-shrink-0 transition-colors ${isDraggingFile ? 'bg-fra-yellow/20 ring-2 ring-fra-yellow ring-inset' : ''}`}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingFile(true); }}
+                  onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingFile(false); }}
+                  onDrop={(e) => {
+                    e.preventDefault(); e.stopPropagation(); setIsDraggingFile(false);
+                    const droppedFiles = Array.from(e.dataTransfer.files);
+                    if (droppedFiles.length > 0) setAttachedFiles(prev => [...prev, ...droppedFiles]);
+                  }}
+                >
                   {/* AI Thinking Bar */}
                   {(runStatus === 'starting' || runStatus === 'running') && (
                     <div className="mb-2 px-3 py-2 bg-black text-white border-2 border-black flex items-center justify-between shadow-brutal-sm">
@@ -860,6 +1071,42 @@ export default function FraidayWorkspace() {
                     </div>
                   )}
 
+                  {/* Hidden file input for attach button */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    multiple
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      if (files.length > 0) setAttachedFiles(prev => [...prev, ...files]);
+                      e.target.value = '';
+                    }}
+                  />
+
+                  {/* Drag-and-drop overlay indicator */}
+                  {isDraggingFile && (
+                    <div className="mb-2 px-3 py-3 border-2 border-dashed border-fra-yellow bg-fra-yellow/10 text-center text-[11px] font-mono font-bold text-neutral-700 animate-pulse">
+                      Drop files here to attach
+                    </div>
+                  )}
+
+                  {/* Attached files preview strip */}
+                  {attachedFiles.length > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      {attachedFiles.map((file, idx) => (
+                        <div key={idx} className="flex items-center space-x-1 bg-neutral-100 border border-neutral-300 px-2 py-1 text-[10px] font-mono font-bold">
+                          <span className="text-neutral-500">📎</span>
+                          <span className="truncate max-w-[120px]">{file.name}</span>
+                          <button
+                            onClick={() => setAttachedFiles(prev => prev.filter((_, i) => i !== idx))}
+                            className="text-red-400 hover:text-red-600 font-black ml-1"
+                          >✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <div className="border-2 border-fra-black bg-white shadow-brutal p-2 mb-2">
                     <textarea 
                       className="w-full text-xs font-mono border-0 focus:ring-0 resize-none p-1 text-black placeholder-neutral-500" 
@@ -868,7 +1115,7 @@ export default function FraidayWorkspace() {
                       value={inputVal}
                       onChange={(e) => setInputVal(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.ctrlKey && e.key === 'Enter') {
+                        if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault();
                           startRun();
                         }
@@ -876,10 +1123,17 @@ export default function FraidayWorkspace() {
                     ></textarea>
                     <div className="flex items-center justify-between pt-1 border-t border-neutral-200 mt-1">
                       <div className="flex items-center space-x-3 text-neutral-600 text-sm pl-1">
+                        <button
+                          className="hover:text-black transition-colors"
+                          onClick={() => fileInputRef.current?.click()}
+                          title="Attach files"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                        </button>
                         <button className="hover:text-black font-mono font-bold text-xs" onClick={() => setInputVal(prev => prev + ' ```\n\n```')}>&lt;/&gt;</button>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <span className="text-[10px] text-neutral-500 font-mono hidden sm:inline">Ctrl + Enter</span>
+                        <span className="text-[10px] text-neutral-500 font-mono hidden sm:inline">Enter to send · Shift+Enter for newline</span>
                         <button 
                           disabled={runStatus === 'starting' || runStatus === 'running'}
                           className={`px-4 py-1.5 text-xs font-bold border-2 border-black flex items-center space-x-1.5 shadow-brutal-sm ${runStatus === 'starting' || runStatus === 'running' ? 'bg-neutral-400 text-neutral-600 cursor-not-allowed' : 'bg-black text-white hover:bg-neutral-800'}`}
@@ -932,10 +1186,11 @@ export default function FraidayWorkspace() {
                   </div>
                 </div>
               </section>
+              {previewOpen && <DragHandle onDrag={(d) => setSplitPreviewWidth(p => Math.max(200, Math.min(1000, p - d)))} className="border-r-2 border-fra-black z-30" />}
 
               {/* Split-View Live Browser Preview */}
               {previewOpen && (
-                <section className="flex flex-col border-r-2 border-fra-black overflow-hidden bg-neutral-100" style={{ width: `${splitPreviewWidth}%` }}>
+                <section className="flex flex-col border-r-2 border-fra-black overflow-hidden bg-neutral-100" style={{ width: splitPreviewWidth }}>
                   <BrowserPreview
                     url={previewUrl}
                     isOpen={previewOpen}
@@ -947,7 +1202,8 @@ export default function FraidayWorkspace() {
               )}
 
               {/* RightInspectorPanel */}
-              <aside className={`bg-fra-cream border-l-2 border-fra-black flex flex-col overflow-y-auto select-none font-mono flex-shrink-0 ${previewOpen ? 'w-72' : 'w-96'}`}>
+              {!previewOpen && <DragHandle onDrag={(d) => setRightInspectorWidth(p => Math.max(200, Math.min(800, p - d)))} className="border-l-2 border-fra-black z-30" />}
+              <aside className="bg-fra-cream flex flex-col overflow-y-auto select-none font-mono flex-shrink-0" style={{ width: previewOpen ? rightInspectorWidth - 100 : rightInspectorWidth, borderLeft: previewOpen ? "2px solid #000" : "none" }}>
                 <div className="grid grid-cols-4 border-b-2 border-fra-black text-[11px] font-bold text-center">
                   <button 
                     className={`py-2.5 border-r-2 border-fra-black font-extrabold transition-colors ${
@@ -1003,7 +1259,7 @@ export default function FraidayWorkspace() {
                           )}
                         </div>
                         <LatticeLoader
-                          status={runStatus === 'running' || runStatus === 'starting' ? 'working' : runStatus === 'completed' ? 'done' : 'idle'}
+                          status={runStatus === 'running' || runStatus === 'starting' ? 'working' : runStatus === 'completed' ? 'done' : undefined}
                           label="Orchestrating Plan"
                           doneLabel="Executed in"
                           errorLabel="Halted after"
@@ -1219,7 +1475,7 @@ export default function FraidayWorkspace() {
                               <div
                                 key={i}
                                 onClick={() => {
-                                  setPreviewUrl(`http://localhost:8000/api/preview/${a.path}`);
+                                  setPreviewUrl(getRelativePreviewUrl(a.path));
                                   setPreviewOpen(true);
                                 }}
                                 className="flex items-center justify-between p-1 border border-neutral-200 bg-neutral-50 hover:bg-fra-yellow/40 cursor-pointer transition-colors"
@@ -1269,7 +1525,7 @@ export default function FraidayWorkspace() {
                                     }`}>{art.operation}</span>
                                     <button
                                       onClick={() => {
-                                        setPreviewUrl(`http://localhost:8000/api/preview/${art.path}`);
+                                        setPreviewUrl(getRelativePreviewUrl(art.path));
                                         setPreviewOpen(true);
                                       }}
                                       className="text-[9px] bg-black text-white px-1 hover:bg-fra-yellow hover:text-black font-bold border border-black"

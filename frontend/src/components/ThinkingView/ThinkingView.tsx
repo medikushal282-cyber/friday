@@ -36,7 +36,7 @@ export const ThinkingView: React.FC<ThinkingViewProps> = ({
   };
 
   return (
-    <div className="border-2 border-fra-black bg-[#0E0E0E] text-white shadow-brutal mb-4 overflow-hidden select-none">
+    <div className="border-2 border-fra-black bg-[#0E0E0E] text-white shadow-brutal mb-4 overflow-hidden">
       {/* Antigravity Thinking Bar Header */}
       <div
         className="flex items-center justify-between px-3 py-2 bg-[#171717] border-b-2 border-fra-black cursor-pointer hover:bg-[#202020] transition-colors"

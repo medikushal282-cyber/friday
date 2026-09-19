@@ -80,9 +80,13 @@ async def execute_run_task(
     objective: str,
     runs_db: dict,
     recent_context: Optional[List[Dict[str, Any]]] = None,
+    session_context_summary: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
     on_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
     model: Optional[str] = "qwen/qwen3.8-27b",
-    provider: Optional[str] = "groq"
+    provider: Optional[str] = "groq",
+    attachments: Optional[List[Dict[str, Any]]] = None
 ):
     ws = get_workspace_manager()
     ws_info = {
@@ -97,6 +101,9 @@ async def execute_run_task(
         "model": model or "qwen/qwen3.8-27b",
         "provider": provider or "groq",
         "workspace": ws_info,
+        "workspace_id": workspace_id,
+        "conversation_id": conversation_id,
+        "session_context_summary": session_context_summary or "",
         "conversation_context": recent_context or [],
         "plan": [],
         "thoughts": [],
@@ -105,6 +112,7 @@ async def execute_run_task(
         "tool_calls": [],
         "observations": [],
         "artifacts": [],
+        "attachments": attachments or [],
         "validation_results": [],
         "status": "started",
         "error": None,
@@ -123,7 +131,10 @@ async def execute_run_task(
 
     await emit(run_id, "context_loaded", "orchestrator", {
         "workspace": ws_info,
+        "workspace_id": workspace_id,
+        "conversation_id": conversation_id,
         "conversation_turns": len(state["conversation_context"]),
+        "context_summary": session_context_summary or "",
         "objective": objective
     })
 
@@ -132,12 +143,29 @@ async def execute_run_task(
         runs_db[run_id]["type"] = "chat"
         state["mode"] = "chat"
 
-        system_prompt = (
-            "You are frAIday, an advanced autonomous AI software engineering assistant. "
-            "The user provided a greeting, conversational question, or general text input. "
-            "Respond naturally, directly, and courteously as an AI assistant. "
-            "Do NOT output JSON plans, tool steps, or markdown fences. Just talk directly with the user."
+        system_prompt = "You are frAIday, an advanced autonomous AI software engineering assistant.\n"
+        if session_context_summary:
+            system_prompt += f"\n[Session Context Memory]:\n{session_context_summary}\n"
+        if recent_context:
+            system_prompt += "\n[Recent Chat History]:\n"
+            for turn in recent_context[-3:]:
+                r = turn.get("role", "user")
+                c = turn.get("content", "")[:180]
+                system_prompt += f"{r.upper()}: {c}\n"
+
+        system_prompt += (
+            "\nRespond naturally, directly, and concisely as an AI assistant. "
+            "Maintain conversational continuity with the user's ongoing session context. "
+            "Do NOT output JSON plans, tool steps, or markdown fences when answering conversational queries."
         )
+
+        # Inject attached file contents so the LLM can see them
+        if attachments:
+            system_prompt += "\n\n[User Attached Files]:\n"
+            for att in attachments:
+                name = att.get('name', 'unknown')
+                content = att.get('content', '')[:4000]  # Cap at 4k chars per file
+                system_prompt += f"--- {name} ---\n{content}\n---\n"
 
         try:
             chat_reply, chat_thought = await asyncio.to_thread(
@@ -173,6 +201,14 @@ async def execute_run_task(
         state["status"] = "completed"
         runs_db[run_id]["status"] = "completed"
         runs_db[run_id]["state"] = state
+
+        # Persist conversation turn to session memory
+        if workspace_id and conversation_id:
+            try:
+                from app.api.sandbox import save_conversation_turn
+                save_conversation_turn(workspace_id, conversation_id, objective, chat_reply)
+            except Exception as e:
+                print(f"Error persisting chat turn: {e}")
 
         if on_complete:
             on_complete({"role": "user", "text": objective, "reply": chat_reply})
@@ -264,6 +300,25 @@ async def execute_run_task(
         else:
             runs_db[run_id]["status"] = "completed"
             await emit(run_id, "run_completed", data={"final_status": "completed"})
+
+        # Persist execution run summary into session conversation
+        if workspace_id and conversation_id:
+            try:
+                from app.api.sandbox import save_conversation_turn
+                summary_msg = f"Task completed: {objective}"
+                if state.get("artifacts"):
+                    art_paths = [a.get("path", "") for a in state["artifacts"] if a.get("path")]
+                    if art_paths:
+                        summary_msg += f"\nArtifacts: {', '.join(art_paths)}"
+                save_conversation_turn(
+                    workspace_id,
+                    conversation_id,
+                    objective,
+                    summary_msg,
+                    {"run_id": run_id, "status": runs_db[run_id]["status"], "artifacts": state.get("artifacts", [])}
+                )
+            except Exception as e:
+                print(f"Error saving execution turn: {e}")
 
         if on_complete:
             on_complete({

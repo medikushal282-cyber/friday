@@ -2,6 +2,7 @@ import re
 import json
 import time
 import asyncio
+from pathlib import Path
 from typing import List, Dict, Any
 
 from app.events import emit
@@ -296,8 +297,28 @@ async def orchestrator_node(state: dict) -> dict:
             research_summary = "\nAccepted Knowledge Base Findings:\n" + json.dumps(accepted, indent=2)
 
     context_summary = ""
+    session_memory = state.get("session_context_summary", "")
+    if session_memory:
+        context_summary += f"\n[Session Context Memory]: {session_memory}\n"
     if context:
-        context_summary = f"\nPrevious Conversation Turns:\n{json.dumps(context, indent=2)}"
+        compact_turns = []
+        for t in context[-3:]:
+            role = t.get("role", "turn")
+            text = t.get("content", t.get("objective", t.get("text", "")))[:250].replace("\n", " ")
+            compact_turns.append(f"- {role}: {text}")
+        context_summary += "\n[Recent Turns]:\n" + "\n".join(compact_turns) + "\n"
+
+    # Inject user-attached file contents
+    attachments_context = ""
+    attachments = state.get("attachments", [])
+    if attachments:
+        attachments_context = "\n[User Attached Files]:\n"
+        for att in attachments:
+            name = att.get("name", "unknown")
+            content = att.get("content", "")[:4000]
+            attachments_context += f"--- {name} ---\n{content}\n---\n"
+
+    agent_docs = load_agent_docs()
 
     system_prompt = f"""You are Fraiday's Dynamic Action Orchestrator.
 Decompose the user's objective into a structured, dependency-aware plan of execution steps.
@@ -315,6 +336,10 @@ Available Controlled Actions:
 Existing Workspace Files: {json.dumps(existing_files)}
 {research_summary}
 {context_summary}
+{attachments_context}
+
+[Agent Documentation / Operating Manual]
+{agent_docs}
 
 Rules:
 1. Every step MUST include: id, description, agent ("executor"), action, target, arguments, depends_on (list of step ids), status ("pending").

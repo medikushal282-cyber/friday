@@ -75,21 +75,22 @@ async def open_in_browser(req: OpenBrowserRequest):
 
 @router.get("/{file_path:path}")
 async def serve_preview_file(file_path: str):
-    wm = get_workspace_manager()
-    abs_path = Path(wm.resolve_path(file_path))
-    
-    import html as html_lib
+    try:
+        wm = get_workspace_manager()
+        abs_path = Path(wm.resolve_path(file_path))
+        
+        import html as html_lib
 
-    # If path is directory or empty, check for index.html
-    if abs_path.is_dir():
-        index_cand = abs_path / "index.html"
-        if index_cand.exists():
-            abs_path = index_cand
-            
-    if not abs_path.exists() or not abs_path.is_file():
-        available = [f.name for f in Path(wm.root_path).glob("*") if f.is_file()][:10]
-        avail_html = "".join([f'<li><a href="/api/preview/{name}" style="color:#FFE600;">{name}</a></li>' for name in available])
-        not_found_html = f"""<!DOCTYPE html>
+        # If path is directory or empty, check for index.html
+        if abs_path.is_dir():
+            index_cand = abs_path / "index.html"
+            if index_cand.exists():
+                abs_path = index_cand
+                
+        if not abs_path.exists() or not abs_path.is_file():
+            available = [f.name for f in Path(wm.root_path).glob("*") if f.is_file()][:10]
+            avail_html = "".join([f'<li><a href="/api/preview/{name}" style="color:#FFE600;">{name}</a></li>' for name in available])
+            not_found_html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -108,27 +109,27 @@ async def serve_preview_file(file_path: str):
     {LIVE_RELOAD_SCRIPT}
 </body>
 </html>"""
-        return HTMLResponse(content=not_found_html, status_code=200)
-        
-    mime_type, _ = mimetypes.guess_type(str(abs_path))
-    mime_type = mime_type or "application/octet-stream"
+            return HTMLResponse(content=not_found_html, status_code=200)
+            
+        mime_type, _ = mimetypes.guess_type(str(abs_path))
+        mime_type = mime_type or "application/octet-stream"
 
-    # For HTML files, inject the live reload script right before </body>
-    if mime_type == "text/html" or abs_path.suffix.lower() in [".html", ".htm"]:
-        content = abs_path.read_text(encoding="utf-8", errors="replace")
-        if "</body>" in content:
-            content = content.replace("</body>", f"{LIVE_RELOAD_SCRIPT}\n</body>")
-        else:
-            content += f"\n{LIVE_RELOAD_SCRIPT}"
-        return HTMLResponse(content=content)
+        # For HTML files, inject the live reload script right before </body>
+        if mime_type == "text/html" or abs_path.suffix.lower() in [".html", ".htm"]:
+            content = abs_path.read_text(encoding="utf-8", errors="replace")
+            if "</body>" in content:
+                content = content.replace("</body>", f"{LIVE_RELOAD_SCRIPT}\n</body>")
+            else:
+                content += f"\n{LIVE_RELOAD_SCRIPT}"
+            return HTMLResponse(content=content)
 
-    # For code/text files, render with dark code theme
-    text_exts = [".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".css", ".txt", ".md", ".sh", ".log", ".yaml", ".yml", ".sql"]
-    if abs_path.suffix.lower() in text_exts or (mime_type and mime_type.startswith("text/")):
-        code_content = abs_path.read_text(encoding="utf-8", errors="replace")
-        escaped_code = html_lib.escape(code_content)
-        lines = code_content.splitlines()
-        code_html = f"""<!DOCTYPE html>
+        # For code/text files, render with dark code theme
+        text_exts = [".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".css", ".txt", ".md", ".sh", ".log", ".yaml", ".yml", ".sql"]
+        if abs_path.suffix.lower() in text_exts or (mime_type and mime_type.startswith("text/")):
+            code_content = abs_path.read_text(encoding="utf-8", errors="replace")
+            escaped_code = html_lib.escape(code_content)
+            lines = code_content.splitlines()
+            code_html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -149,6 +150,9 @@ async def serve_preview_file(file_path: str):
     {LIVE_RELOAD_SCRIPT}
 </body>
 </html>"""
-        return HTMLResponse(content=code_html)
+            return HTMLResponse(content=code_html)
 
-    return FileResponse(abs_path, media_type=mime_type)
+        return FileResponse(path=str(abs_path), media_type=mime_type)
+    except Exception as e:
+        import traceback
+        return HTMLResponse(content=f"<pre>Error: {str(e)}\n\n{traceback.format_exc()}</pre>", status_code=500)

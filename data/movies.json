@@ -1,0 +1,34 @@
+[
+  {
+    "id": 1,
+    "title": "Inception",
+    "genre": ["Sci-Fi", "Action"],
+    "rating": 8.8,
+    "duration": 148,
+    "releaseDate": "2010-07-16",
+    "language": "English",
+    "posterUrl": "https://example.com/posters/inception.jpg",
+    "description": "A thief who steals corporate secrets through dream-sharing technology is given the inverse task of planting an idea.",
+    "showtimes": [
+      "2023-12-01T14:00:00",
+      "2023-12-01T18:00:00",
+      "2023-12-01T22:00:00"
+    ]
+  },
+  {
+    "id": 2,
+    "title": "The Dark Knight",
+    "genre": ["Action", "Crime", "Drama"],
+    "rating": 9.0,
+    "duration": 152,
+    "releaseDate": "2008-07-18",
+    "language": "English",
+    "posterUrl": "https://example.com/posters/dark_knight.jpg",
+    "description": "When the menace known as the Joker emerges, Batman must accept one of the greatest psychological and physical tests.",
+    "showtimes": [
+      "2023-12-01T15:00:00",
+      "2023-12-01T19:00:00",
+      "2023-12-01T23:00:00"
+    ]
+  }
+]

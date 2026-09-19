@@ -35,7 +35,18 @@ TOOL_SCHEMAS = {
     "inspect_runtime": {
         "description": "Returns runtime environment information for Python, Node, Git, etc.",
         "parameters": {}
-    }
+    },
+    "search_files": {"description": "Search within files.", "parameters": {"pattern": "string", "path": "string", "regex": "bool"}},
+    "search_web": {"description": "Web search for research.", "parameters": {"query": "string"}},
+    "append_file": {"description": "Append to a file.", "parameters": {"path": "string", "content": "string"}},
+    "rename_file": {"description": "Rename/move a file.", "parameters": {"old_path": "string", "new_path": "string"}},
+    "copy_file": {"description": "Copy a file.", "parameters": {"src": "string", "dest": "string"}},
+    "get_file_info": {"description": "Get file metadata.", "parameters": {"path": "string"}},
+    "list_directory_tree": {"description": "Recursive tree listing.", "parameters": {"path": "string", "max_depth": "int"}},
+    "diff_files": {"description": "Get unified diff.", "parameters": {"path_a": "string", "path_b": "string"}},
+    "install_package": {"description": "Install dependencies.", "parameters": {"name": "string", "manager": "string"}},
+    "patch_file": {"description": "Find-and-replace in a file.", "parameters": {"path": "string", "find": "string", "replace": "string"}},
+    "preview_browser": {"description": "Preview a file rendering in the browser.", "parameters": {"path": "string"}}
 }
 
 def tool_list_directory(path: str = ".") -> Dict[str, Any]:
@@ -418,6 +429,169 @@ def tool_inspect_runtime() -> Dict[str, Any]:
             "error": {"code": "TOOL_EXECUTION_ERROR", "message": str(e)}
         }
 
+
+import fnmatch
+import shutil
+import difflib
+import urllib.request
+import urllib.parse
+from datetime import datetime
+
+def tool_search_files(pattern: str, path: str = ".", regex: bool = False) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    try:
+        full_path = ws.resolve_path(path)
+        if not os.path.isdir(full_path):
+            return {"success": False, "tool": "search_files", "error": {"code": "NOT_A_DIRECTORY", "message": "Path is not a directory"}}
+        
+        matches = []
+        if regex:
+            compiled = re.compile(pattern)
+        for root, _, files in os.walk(full_path):
+            if '.git' in root or 'node_modules' in root:
+                continue
+            for name in files:
+                filepath = os.path.join(root, name)
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        for i, line in enumerate(f):
+                            if regex:
+                                if compiled.search(line):
+                                    matches.append({"file": ws.get_relative_path(filepath), "line": i+1, "content": line.strip()})
+                            else:
+                                if pattern in line:
+                                    matches.append({"file": ws.get_relative_path(filepath), "line": i+1, "content": line.strip()})
+                except Exception:
+                    pass
+        return {"success": True, "tool": "search_files", "result": {"matches": matches[:100]}}
+    except Exception as e:
+        return {"success": False, "tool": "search_files", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_search_web(query: str) -> Dict[str, Any]:
+    try:
+        url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            html = response.read().decode('utf-8')
+        
+        # Simple extraction of snippets
+        results = []
+        for m in re.finditer(r'<a class="result__snippet[^>]*>(.*?)</a>', html, re.DOTALL):
+            text = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+            if text:
+                results.append(text)
+        return {"success": True, "tool": "search_web", "result": {"query": query, "snippets": results[:5]}}
+    except Exception as e:
+        return {"success": False, "tool": "search_web", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_append_file(path: str, content: str) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    try:
+        full_path = ws.resolve_path(path)
+        with open(full_path, "a", encoding="utf-8") as f:
+            f.write(content)
+        return {"success": True, "tool": "append_file", "result": {"path": path, "appended": True}}
+    except Exception as e:
+        return {"success": False, "tool": "append_file", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_rename_file(old_path: str, new_path: str) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    try:
+        old_full = ws.resolve_path(old_path)
+        new_full = ws.resolve_path(new_path)
+        os.rename(old_full, new_full)
+        return {"success": True, "tool": "rename_file", "result": {"old": old_path, "new": new_path}}
+    except Exception as e:
+        return {"success": False, "tool": "rename_file", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_copy_file(src: str, dest: str) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    try:
+        src_full = ws.resolve_path(src)
+        dest_full = ws.resolve_path(dest)
+        if os.path.isdir(src_full):
+            shutil.copytree(src_full, dest_full)
+        else:
+            shutil.copy2(src_full, dest_full)
+        return {"success": True, "tool": "copy_file", "result": {"src": src, "dest": dest}}
+    except Exception as e:
+        return {"success": False, "tool": "copy_file", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_get_file_info(path: str) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    try:
+        full = ws.resolve_path(path)
+        st = os.stat(full)
+        info = {
+            "size": st.st_size,
+            "modified": datetime.fromtimestamp(st.st_mtime).isoformat(),
+            "is_dir": os.path.isdir(full)
+        }
+        return {"success": True, "tool": "get_file_info", "result": {"path": path, "info": info}}
+    except Exception as e:
+        return {"success": False, "tool": "get_file_info", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_list_directory_tree(path: str = ".", max_depth: int = 3) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    try:
+        start_full = ws.resolve_path(path)
+        start_depth = start_full.count(os.sep)
+        tree = []
+        for root, dirs, files in os.walk(start_full):
+            if '.git' in dirs: dirs.remove('.git')
+            if 'node_modules' in dirs: dirs.remove('node_modules')
+            depth = root.count(os.sep) - start_depth
+            if depth >= max_depth:
+                del dirs[:]
+            rel_root = ws.get_relative_path(root)
+            tree.append({"directory": rel_root, "files": files})
+        return {"success": True, "tool": "list_directory_tree", "result": {"tree": tree[:100]}}
+    except Exception as e:
+        return {"success": False, "tool": "list_directory_tree", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_diff_files(path_a: str, path_b: str) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    try:
+        fa = ws.resolve_path(path_a)
+        fb = ws.resolve_path(path_b)
+        with open(fa, 'r', encoding='utf-8', errors='ignore') as a, open(fb, 'r', encoding='utf-8', errors='ignore') as b:
+            diff = list(difflib.unified_diff(a.readlines(), b.readlines(), fromfile=path_a, tofile=path_b))
+        return {"success": True, "tool": "diff_files", "result": {"diff": "".join(diff)}}
+    except Exception as e:
+        return {"success": False, "tool": "diff_files", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_install_package(name: str, manager: str = "pip", approved: bool = False) -> Dict[str, Any]:
+    if not approved:
+        reason = "Package installation requires user approval."
+        return {"success": False, "tool": "install_package", "status": "approval_required", "reason": reason, "error": {"code": "APPROVAL_REQUIRED", "message": reason}}
+    cmd = f"{manager} install {name}"
+    return tool_run_command(cmd)
+
+def tool_patch_file(path: str, find: str, replace: str, count: int = 1) -> Dict[str, Any]:
+    ws = get_workspace_manager()
+    try:
+        full = ws.resolve_path(path)
+        with open(full, 'r', encoding='utf-8') as f:
+            data = f.read()
+        data = data.replace(find, replace, count)
+        with open(full, 'w', encoding='utf-8') as f:
+            f.write(data)
+        return {"success": True, "tool": "patch_file", "result": {"path": path, "patched": True}}
+    except Exception as e:
+        return {"success": False, "tool": "patch_file", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
+def tool_preview_browser(path: str = "") -> Dict[str, Any]:
+    try:
+        if not path:
+            path = "index.html"
+        url = "http://localhost:8000/api/preview/" + urllib.parse.quote(path)
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            html = response.read().decode('utf-8', errors='replace')
+        return {"success": True, "tool": "preview_browser", "result": {"path": path, "html_snippet": html[:2500]}}
+    except Exception as e:
+        return {"success": False, "tool": "preview_browser", "error": {"code": "TOOL_ERROR", "message": str(e)}}
+
 DISPATCH_TABLE = {
     "list_directory": tool_list_directory,
     "read_file": tool_read_file,
@@ -425,7 +599,18 @@ DISPATCH_TABLE = {
     "update_file": tool_update_file,
     "delete_file": tool_delete_file,
     "run_command": tool_run_command,
-    "inspect_runtime": tool_inspect_runtime
+    "inspect_runtime": tool_inspect_runtime,
+    "search_files": tool_search_files,
+    "search_web": tool_search_web,
+    "append_file": tool_append_file,
+    "rename_file": tool_rename_file,
+    "copy_file": tool_copy_file,
+    "get_file_info": tool_get_file_info,
+    "list_directory_tree": tool_list_directory_tree,
+    "diff_files": tool_diff_files,
+    "install_package": tool_install_package,
+    "patch_file": tool_patch_file,
+    "preview_browser": tool_preview_browser,
 }
 
 def validate_action_schema(action: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:

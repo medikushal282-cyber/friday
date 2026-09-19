@@ -13,10 +13,18 @@ from app.workspace.manager import get_workspace_manager
 
 router = APIRouter(prefix="/runs", tags=["Runs"])
 
+class AttachmentItem(BaseModel):
+    name: str
+    content: str
+    size: Optional[int] = 0
+
 class RunRequest(BaseModel):
     objective: str
     model: Optional[str] = "qwen/qwen3.8-27b"
     provider: Optional[str] = "groq"
+    workspace_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    attachments: Optional[List[AttachmentItem]] = None
 
 RunRequest.model_rebuild()
 
@@ -47,27 +55,46 @@ async def create_run(request: RunRequest):
     selected_model = request.model or "qwen/qwen3.8-27b"
     selected_provider = request.provider or "groq"
     
+    # Resolve workspace and conversation session
+    ws_id = request.workspace_id
+    conv_id = request.conversation_id
+    from app.api.sandbox import get_or_create_default_session, get_conversation_memory
+    if not ws_id or not conv_id:
+        ws_id, conv_id = get_or_create_default_session()
+        
+    session_memory = get_conversation_memory(ws_id, conv_id)
+    recent_context = session_memory.get("recent_messages", [])
+    context_summary = session_memory.get("context_summary", "")
+
     RUNS_DB[run_id] = {
         "run_id": run_id,
         "objective": request.objective,
         "model": selected_model,
         "provider": selected_provider,
+        "workspace_id": ws_id,
+        "conversation_id": conv_id,
         "status": "pending",
         "state": {}
     }
     
-    # Snapshot of recent conversation context
-    recent_context = list(SESSION_HISTORY)
-    
+    # Convert attachments to plain dicts for the workflow
+    attachments_data = None
+    if request.attachments:
+        attachments_data = [a.model_dump() for a in request.attachments]
+
     asyncio.create_task(
         execute_run_task(
             run_id,
             request.objective,
             RUNS_DB,
-            recent_context,
-            append_session_history,
+            recent_context=recent_context,
+            session_context_summary=context_summary,
+            workspace_id=ws_id,
+            conversation_id=conv_id,
+            on_complete=append_session_history,
             model=selected_model,
-            provider=selected_provider
+            provider=selected_provider,
+            attachments=attachments_data
         )
     )
     

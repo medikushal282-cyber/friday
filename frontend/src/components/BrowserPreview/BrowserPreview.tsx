@@ -142,11 +142,10 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
       {/* Frame Container */}
       <div className="flex-1 bg-neutral-100 flex items-start justify-center overflow-auto p-1">
         <div
-          className={`${getContainerWidth()} mx-auto border border-neutral-300 bg-white shadow-md flex flex-col overflow-hidden`}
+          className={`${getContainerWidth()} mx-auto bg-white shadow-md flex flex-col overflow-hidden`}
           style={{
-            transform: `scale(${zoom / 100})`,
-            transformOrigin: 'top center',
-            height: `${10000 / zoom}%`,
+            zoom: zoom / 100,
+            height: '100%',
             minHeight: embedded ? '100%' : '500px',
           }}
         >
@@ -156,7 +155,7 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
             src={currentUrl}
             title="Live Preview"
             className="w-full h-full border-0"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-top-navigation"
           />
         </div>
       </div>
