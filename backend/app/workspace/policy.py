@@ -1,3 +1,4 @@
+import os
 import re
 import shlex
 from typing import Tuple, List, Union
@@ -77,6 +78,14 @@ def check_command_policy(command: Union[str, List[str]]) -> Tuple[str, str]:
         if cmd_lower == safe_prefix or cmd_lower.startswith(safe_prefix + " "):
             return POLICY_SAFE, "Command is classified as safe"
             
+    first_token = cmd_stripped.split()[0] if cmd_stripped else ""
+    first_token = first_token.strip('"\'')
+    first_token_name = os.path.basename(first_token).lower()
+    if first_token_name.endswith(".exe"):
+        first_token_name = first_token_name[:-4]
+    if first_token_name in ["python", "python3", "py", "node", "git", "dir", "ls", "type", "cat", "echo", "pwd"]:
+        return POLICY_SAFE, "Command is classified as safe"
+
     # Also check if it is executing a python file or node script in workspace
     if cmd_lower.endswith(".py") or cmd_lower.endswith(".js") or cmd_lower.endswith(".ts"):
         return POLICY_SAFE, "Executing script"

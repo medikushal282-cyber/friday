@@ -1,0 +1,26 @@
+[
+    {
+        "id": "1",
+        "name": "Alice Johnson",
+        "department": "Engineering",
+        "salary": "95000"
+    },
+    {
+        "id": "2",
+        "name": "Bob Smith",
+        "department": "Marketing",
+        "salary": "72000"
+    },
+    {
+        "id": "3",
+        "name": "Carol Williams",
+        "department": "Engineering",
+        "salary": "88000"
+    },
+    {
+        "id": "4",
+        "name": "David Brown",
+        "department": "HR",
+        "salary": "65000"
+    }
+]

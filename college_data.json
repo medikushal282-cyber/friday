@@ -1,0 +1,146 @@
+json
+{
+  "university": {
+    "name": "Westfield State University",
+    "founded": 1941,
+    "motto": "Integrity, Excellence, Service",
+    "location": "Westfield, Massachusetts",
+    "color_primary": "#8B0000",
+    "color_secondary": "#1B2631",
+    "color_accent": "#F4A70D",
+    "color_light_bg": "#F8F9FA",
+    "total_students": 14200,
+    "total_faculty": 485,
+    "student_faculty_ratio": "29:1",
+    "programs": {
+      "undergraduate": 150,
+      "graduate": 85,
+      "doctoral": 12
+    }
+  },
+  "stats": {
+    "enrollment": {
+      "current": 14200,
+      "last_year": 13800,
+      "trend": "up",
+      "change_percent": 2.9
+    },
+    "tuition": {
+      "in_state_annual": 14500,
+      "out_of_state_annual": 29800,
+      "room_board": 9200
+    },
+    "acceptance_rate": 62,
+    "retention_rate": 78,
+    "graduation_rate": 64,
+    "alumni_donation_rate": 31,
+    "endowment": 1280000000,
+    "annual_budget": 4150000000
+  },
+  "departments": [
+    {
+      "id": "eng",
+      "name": "Engineering & Computer Science",
+      "acronym": "ECS",
+      "students": 2850,
+      "faculty": 95,
+      "ranking": 1,
+      "dean": "Dr. Sarah Mitchell",
+      "programs": ["Computer Science", "Software Engineering", "Electrical Engineering", "Mechanical Engineering", "Bioengineering", "Data Science", "Cybersecurity"],
+      "color": "#2563EB"
+    },
+    {
+      "id": "bus",
+      "name": "Business Administration",
+      "acronym": "BUS",
+      "students": 3100,
+      "faculty": 88,
+      "ranking": 2,
+      "dean": "Dr. James Okafor",
+      "programs": ["Finance", "Marketing", "Accounting", "Management", "Entrepreneurship", "Supply Chain Management", "Economics"],
+      "color": "#059669"
+    },
+    {
+      "id": "hum",
+      "name": "Humanities & Social Sciences",
+      "acronym": "HUM",
+      "students": 2450,
+      "faculty": 72,
+      "ranking": 3,
+      "dean": "Dr. Elena Vasquez",
+      "programs": ["English Literature", "History", "Philosophy", "Sociology", "Political Science", "Psychology", "Communications"],
+      "color": "#D97706"
+    },
+    {
+      "id": "scs",
+      "name": "Sciences & Mathematics",
+      "acronym": "SCS",
+      "students": 2100,
+      "faculty": 78,
+      "ranking": 4,
+      "dean": "Dr. Robert Chen",
+      "programs": ["Biology", "Chemistry", "Physics", "Mathematics", "Statistics", "Environmental Science", "Neuroscience"],
+      "color": "#7C3AED"
+    },
+    {
+      "id": "art",
+      "name": "Fine & Performing Arts",
+      "acronym": "FPA",
+      "students": 980,
+      "faculty": 45,
+      "ranking": 5,
+      "dean": "Dr. Marcus Thompson",
+      "programs": ["Fine Art", "Music Performance", "Theatre", "Film & Media", "Design", "Dance", "Art History"],
+      "color": "#DB2777"
+    },
+    {
+      "id": "nrs",
+      "name": "Nursing & Health Sciences",
+      "acronym": "NRS",
+      "students": 1850,
+      "faculty": 52,
+      "ranking": 6,
+      "dean": "Dr. Patricia Nguyen",
+      "programs": ["Nursing", "Public Health", "Physical Therapy", "Occupational Therapy", "Health Informatics"],
+      "color": "#0891B2"
+    },
+    {
+      "id": "edm",
+      "name": "Education & Counseling",
+      "acronym": "EDM",
+      "students": 970,
+      "faculty": 38,
+      "ranking": 7,
+      "dean": "Dr. Angela Brooks",
+      "programs": ["Early Childhood Education", "Secondary Education", "Special Education", "Counseling Psychology", "Educational Leadership"],
+      "color": "#CA8A04"
+    }
+  ],
+  "enrollment_by_year": [
+    {"year": 2018, "enrolled": 13200, "undergraduate": 11800, "graduate": 1400},
+    {"year": 2019, "enrolled": 13450, "undergraduate": 12050, "graduate": 1400},
+    {"year": 2020, "enrolled": 13100, "undergraduate": 11700, "graduate": 1400},
+    {"year": 2021, "enrolled": 13300, "undergraduate": 11900, "graduate": 1400},
+    {"year": 2022, "enrolled": 13600, "undergraduate": 12200, "graduate": 1400},
+    {"year": 2023, "enrolled": 13800, "undergraduate": 12400, "graduate": 1400},
+    {"year": 2024, "enrolled": 14200, "undergraduate": 12800, "graduate": 1400}
+  ],
+  "enrollment_by_class_year": [
+    {"class": "Freshman", "count": 3450, "gpa_avg": 3.42},
+    {"class": "Sophomore", "count": 3320, "gpa_avg": 3.15},
+    {"class": "Junior", "count": 3580, "gpa_avg": 3.08},
+    {"class": "Senior", "count": 3080, "gpa_avg": 3.21},
+    {"class": "Graduate", "count": 1400, "gpa_avg": 3.62}
+  ],
+  "gpa_distribution": [
+    {"range": "4.0", "count": 520, "color": "#16A34A"},
+    {"range": "3.75 - 3.99", "count": 2100, "color": "#22C55E"},
+    {"range": "3.50 - 3.74", "count": 3850, "color": "#86EFAC"},
+    {"range": "3.25 - 3.49", "count": 4200, "color": "#4ADE80"},
+    {"range": "3.00 - 3.24", "count": 2800, "color": "#166534"},
+    {"range": "Below 3.00", "count": 850, "color": "#DC2626"}
+  ],
+  "financial_summary": {
+    "total_revenue": [
+      {"year": 2018, "scholarship": 420, "grants": 680, "donations": 185, "tuition": 520, "other": 120, "total": 1925},
+      {"year": 2019, "scholarship": 445, "grants": 710, "donations": 200, "tuition": 545, "other": 1

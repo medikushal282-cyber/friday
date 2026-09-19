@@ -146,7 +146,7 @@ export default function FraidayWorkspace() {
             addActivity({
               type: 'RESULT',
               title: `Tool Result: ${eventData.tool?.toUpperCase()}`,
-              detail: isApproval ? `APPROVAL REQUIRED: ${eventData.reason}` : (isSuccess ? 'Success' : `Error: ${eventData.error || eventData.reason}`),
+              detail: isApproval ? `APPROVAL REQUIRED: ${eventData.reason}` : (isSuccess ? 'Success' : `Error: ${typeof eventData.error === 'object' && eventData.error !== null ? (eventData.error.message || JSON.stringify(eventData.error)) : (eventData.error || eventData.reason)}`),
               status: isApproval ? 'approval_required' : (isSuccess ? 'completed' : 'failed')
             });
           } else if (type === 'file_created') {
@@ -374,7 +374,7 @@ export default function FraidayWorkspace() {
               </div>
               <div className="space-y-0.5 mb-2">
                 <div className="flex items-center space-x-1.5 text-neutral-300 font-mono text-[11px] px-1 py-1 font-bold">
-                  <span className="text-fra-yellow">//</span><span>{workspace}</span>
+                  <span className="text-fra-yellow">{"//"}</span><span>{workspace}</span>
                 </div>
                 <div className="pl-4 space-y-0.5">
                   <div className="text-neutral-400 hover:text-white px-2 py-1 text-[10px] font-mono break-all truncate" title={workspaceRoot}>
@@ -413,7 +413,7 @@ export default function FraidayWorkspace() {
 
           <div className="p-3 border-t-2 border-fra-black bg-neutral-950 flex-shrink-0">
             <div className="border border-neutral-800 p-2 text-[9px] font-mono leading-tight uppercase text-neutral-400 tracking-wider">
-              <span className="text-white font-bold block mb-1">"SMALL EXECUTIONS COMPOUND INTO BIG THINGS."</span>
+              <span className="text-white font-bold block mb-1">&quot;SMALL EXECUTIONS COMPOUND INTO BIG THINGS.&quot;</span>
               <span className="text-[8px] text-fra-green font-bold">ACTION-ORIENTED RUNTIME ACTIVE</span>
             </div>
           </div>
