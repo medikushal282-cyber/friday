@@ -336,11 +336,21 @@ Do NOT include markdown or chain-of-thought."""
 
     user_prompt = f"Objective: {objective}"
 
+    from app.llm.models import get_model_registry
+    registry = get_model_registry()
+    model_to_use = registry.resolve_model_for_agent(
+        "orchestrator", 
+        default_model=state.get("model") or "llama-3.1-8b-instant",
+        custom_routing=state.get("model_routing")
+    )
+    
+    await emit(state["run_id"], "model_selected", "orchestrator", {"model": model_to_use})
+
     plan_data = None
     try:
-        response = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+        response = await asyncio.to_thread(call_groq, system_prompt, user_prompt, model=model_to_use)
         plan_data = json.loads(clean_json(response))
-    except Exception:
+    except Exception as e:
         plan_data = None
 
     from app.agents.registry import get_agent_registry

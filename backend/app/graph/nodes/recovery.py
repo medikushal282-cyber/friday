@@ -92,7 +92,16 @@ async def recovery_node(state: dict) -> dict:
         repaired_code = None
         try:
             from app.llm.router import call_groq
-            repaired_code = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+            from app.llm.models import get_model_registry
+            registry = get_model_registry()
+            model_to_use = registry.resolve_model_for_agent(
+                "debugging_agent", 
+                default_model=state.get("model") or "qwen/qwen3.8-27b",
+                custom_routing=state.get("model_routing")
+            )
+            await emit(run_id, "model_selected", "recovery", {"model": model_to_use})
+            
+            repaired_code = await asyncio.to_thread(call_groq, system_prompt, user_prompt, model=model_to_use)
         except Exception:
             repaired_code = None
 

@@ -347,8 +347,18 @@ async def executor_node(state: dict) -> dict:
             
             system_prompt = f"Return ONLY valid file content for target file '{rel_path}'. Do NOT include markdown fences, conversational commentary, or tool call markup."
             user_prompt = f"Target: {rel_path}\nObjective: {objective}"
+            
+            from app.llm.models import get_model_registry
+            registry = get_model_registry()
+            model_to_use = registry.resolve_model_for_agent(
+                "coding_agent", 
+                default_model=state.get("model") or "qwen/qwen3.8-27b",
+                custom_routing=state.get("model_routing")
+            )
+            await emit(run_id, "model_selected", "executor", {"model": model_to_use})
+            
             try:
-                code = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+                code = await asyncio.to_thread(call_groq, system_prompt, user_prompt, model=model_to_use)
             except Exception:
                 code = generate_smart_file_content(rel_path, objective, state.get("research", []), state.get("observations", []))
 
@@ -395,8 +405,18 @@ async def executor_node(state: dict) -> dict:
 
             system_prompt = f"Update target file '{rel_path}' content. Return ONLY valid file content without markdown or natural language commentary.\nExisting content:\n{existing_code}\nObjective: {objective}"
             user_prompt = f"Target: {rel_path}"
+            
+            from app.llm.models import get_model_registry
+            registry = get_model_registry()
+            model_to_use = registry.resolve_model_for_agent(
+                "coding_agent", 
+                default_model=state.get("model") or "qwen/qwen3.8-27b",
+                custom_routing=state.get("model_routing")
+            )
+            await emit(run_id, "model_selected", "executor", {"model": model_to_use})
+            
             try:
-                updated_code = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+                updated_code = await asyncio.to_thread(call_groq, system_prompt, user_prompt, model=model_to_use)
             except Exception:
                 quoted = extract_quoted_strings(objective)
                 if len(quoted) >= 2:

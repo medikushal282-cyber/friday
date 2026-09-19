@@ -36,7 +36,7 @@ def health_check():
 def groq_health():
     start_time = time.time()
     try:
-        call_groq("Reply only OK", "hi")
+        call_groq("Reply only OK", "hi", model="qwen/qwen3.8-27b")
         latency_ms = int((time.time() - start_time) * 1000)
         return {
             "provider": "groq",

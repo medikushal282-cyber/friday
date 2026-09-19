@@ -1,2 +1,107 @@
-# index.html
-print('Executing implementation for index.html')
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Northlight — Studio of Field Light</title>
+  <meta name="description" content="A field studio working across night photography, dark sky stewardship, timed light and field printing.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Spline+Sans:wght@300..700&family=Spline+Sans+Mono:wght@300..500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --font-primary: 'Spline Sans', sans-serif;
+      --font-secondary: 'Fraunces', serif;
+      --bg-color: #fafafa;
+      --text-color: #222;
+      --accent-color: #3a86ff;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-primary);
+      background: var(--bg-color);
+      color: var(--text-color);
+      line-height: 1.6;
+    }
+    header, footer {
+      background: var(--accent-color);
+      color: #fff;
+      text-align: center;
+      padding: 1rem 0;
+    }
+    nav {
+      margin-top: 0.5rem;
+    }
+    nav a {
+      color: #fff;
+      margin: 0 1rem;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    main {
+      max-width: 960px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+    h1, h2 {
+      font-family: var(--font-secondary);
+      margin-bottom: 1rem;
+    }
+    p {
+      margin-bottom: 1rem;
+    }
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+    }
+    .gallery img {
+      width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    footer a {
+      color: #fff;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Northlight</h1>
+    <p>Studio of Field Light</p>
+    <nav>
+      <a href="#about">About</a>
+      <a href="#gallery">Gallery</a>
+      <a href="#contact">Contact</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="about">
+      <h2>About Us</h2>
+      <p>Northlight is a field studio working across night photography, dark‑sky stewardship, timed light, and field printing. We capture the subtle beauty of the night and translate it into lasting visual stories.</p>
+    </section>
+
+    <section id="gallery">
+      <h2>Gallery</h2>
+      <div class="gallery">
+        <img src="images/photo1.jpg" alt="Night sky over a meadow">
+        <img src="images/photo2.jpg" alt="Timed light installation in the forest">
+        <img src="images/photo3.jpg" alt="Field printed image of a star trail">
+        <img src="images/photo4.jpg" alt="Dark sky stewardship project">
+      </div>
+    </section>
+
+    <section id="contact">
+      <h2>Contact</h2>
+      <p>Get in touch to collaborate or learn more about our projects.</p>
+      <p>Email: <a href="mailto:info@northlightstudio.com">info@northlightstudio.com</a></p>
+    </section>
+  </main>
+
+  <footer>
+    <p>&copy; <script>document.write(new Date().getFullYear())</script> Northlight Studio. All rights reserved.</p>
+  </footer>
+</body>
+</html>

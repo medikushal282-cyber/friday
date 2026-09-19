@@ -48,7 +48,7 @@ async def create_run(request: RunRequest):
         "run_id": run_id,
         "objective": request.objective,
         "mode": request.mode or "autonomous",
-        "model": request.model or "qwen/qwen3.8-27b",
+        "model": request.model,
         "model_routing": request.model_routing or {},
         "status": "pending",
         "state": {}
@@ -65,6 +65,7 @@ async def create_run(request: RunRequest):
             recent_context,
             append_session_history,
             mode=request.mode or "autonomous",
+            model=request.model,
             model_routing=request.model_routing or {}
         )
     )

@@ -47,6 +47,7 @@ async def execute_run_task(
     recent_context: Optional[List[Dict[str, Any]]] = None,
     on_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
     mode: str = "autonomous",
+    model: Optional[str] = None,
     model_routing: Optional[Dict[str, str]] = None
 ):
     ws = get_workspace_manager()
@@ -60,6 +61,7 @@ async def execute_run_task(
         "run_id": run_id,
         "objective": objective,
         "mode": mode.lower(),
+        "model": model,
         "model_routing": model_routing or {},
         "workspace": ws_info,
         "conversation_context": recent_context or [],

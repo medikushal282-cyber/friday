@@ -103,10 +103,20 @@ Do NOT include markdown or chain-of-thought."""
 
     user_prompt = f"Objective: {objective}\nQuery: {query}"
 
+    from app.llm.models import get_model_registry
+    registry = get_model_registry()
+    model_to_use = registry.resolve_model_for_agent(
+        "researcher", 
+        default_model=state.get("model") or "llama-3.1-8b-instant",
+        custom_routing=state.get("model_routing")
+    )
+
+    await emit(run_id, "model_selected", "researcher", {"model": model_to_use})
+
     try:
-        response = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+        response = await asyncio.to_thread(call_groq, system_prompt, user_prompt, model=model_to_use)
         finding_data = json.loads(clean_json(response))
-    except Exception:
+    except Exception as e:
         # Fallback structured research finding for offline/test environments
         if "csv" in objective.lower() and "json" in objective.lower():
             finding_data = {

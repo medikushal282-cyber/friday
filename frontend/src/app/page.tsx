@@ -50,7 +50,28 @@ export default function FraidayWorkspace() {
   const [approvalRequest, setApprovalRequest] = useState<any>(null);
   const [rightPanelTab, setRightPanelTab] = useState<'workflow' | 'context' | 'agents' | 'artifacts'>('workflow');
   const [availableModels, setAvailableModels] = useState<any[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [availableAgents, setAvailableAgents] = useState<any[]>([]);
+
+  const fetchModels = async () => {
+    setModelsLoading(true);
+    try {
+      const res = await fetch("http://localhost:8000/api/models");
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableModels(data);
+        // auto-select first agent-ready model if current is not in the list or invalid
+        if (data.length > 0 && !data.find((m: any) => m.id === model)) {
+          const ready = data.find((m: any) => m.agent_compatible) || data[0];
+          setModel(ready.id);
+        }
+      }
+    } catch (e) {
+      console.warn("Backend models API not reachable yet", e);
+    } finally {
+      setModelsLoading(false);
+    }
+  };
 
   // Fetch real workspace, runtime, models, and agents from backend on mount
   useEffect(() => {
@@ -65,17 +86,6 @@ export default function FraidayWorkspace() {
         }
       } catch (e) {
         console.warn("Backend workspace API not reachable yet", e);
-      }
-    };
-    const fetchModels = async () => {
-      try {
-        const res = await fetch("http://localhost:8000/api/models");
-        if (res.ok) {
-          const data = await res.json();
-          setAvailableModels(data);
-        }
-      } catch (e) {
-        console.warn("Backend models API not reachable yet", e);
       }
     };
     const fetchAgents = async () => {
@@ -202,6 +212,13 @@ export default function FraidayWorkspace() {
               type: 'REASONING',
               title: `${(node || 'AGENT').toUpperCase()} Reasoning Summary`,
               detail: eventData?.summary || eventData?.high_level_intent,
+              status: 'completed'
+            });
+          } else if (type === 'model_selected') {
+            addActivity({
+              type: 'MODEL',
+              title: `Model Initialized: ${eventData?.model}`,
+              detail: `Node ${node?.toUpperCase()} routing to ${eventData?.model}`,
               status: 'completed'
             });
           } else if (type === 'agent_selected') {
@@ -818,14 +835,14 @@ export default function FraidayWorkspace() {
                           <span>Active Model</span><span className="font-bold text-black bg-fra-yellow px-1 border border-black">{model}</span><span className="text-[8px]">v</span>
                         </button>
                         {modelMenuOpen && (
-                          <div className="absolute bottom-8 left-0 w-72 bg-white border-2 border-fra-black shadow-brutal z-50 p-1 space-y-1">
-                            <div className="text-[9px] uppercase font-bold text-neutral-500 px-2 py-1 border-b border-neutral-200">Available Models & Providers</div>
-                            {(availableModels.length > 0 ? availableModels : [
-                              { id: 'qwen/qwen3.8-27b', display_name: 'Qwen 3.8 27B (Groq)', provider: 'groq', status: 'available' },
-                              { id: 'llama-3.3-70b-versatile', display_name: 'Llama 3.3 70B Versatile (Groq)', provider: 'groq', status: 'available' },
-                              { id: 'llama-3.1-8b-instant', display_name: 'Llama 3.1 8B Instant (Groq)', provider: 'groq', status: 'available' },
-                              { id: 'openai/gpt-4o', display_name: 'GPT-4o (OpenAI)', provider: 'openai', status: 'unconfigured' },
-                            ]).map(m => (
+                          <div className="absolute bottom-8 left-0 w-80 bg-white border-2 border-fra-black shadow-brutal z-50 p-1 space-y-1">
+                            <div className="flex justify-between items-center text-[9px] uppercase font-bold text-neutral-500 px-2 py-1 border-b border-neutral-200">
+                              <span>Available Models & Providers</span>
+                              <button onClick={(e) => { e.stopPropagation(); fetchModels(); }} className="hover:text-black hover:underline" disabled={modelsLoading}>
+                                {modelsLoading ? '[REFRESHING...]' : '[REFRESH]'}
+                              </button>
+                            </div>
+                            {(availableModels.length > 0 ? availableModels : []).map(m => (
                               <div
                                 key={m.id}
                                 className={`p-1.5 hover:bg-fra-yellow cursor-pointer border border-transparent hover:border-black flex items-center justify-between ${model === m.id ? 'bg-fra-cream-card border-black' : ''}`}
@@ -833,7 +850,11 @@ export default function FraidayWorkspace() {
                               >
                                 <div>
                                   <div className="font-bold text-[11px] text-black">{m.display_name || m.id}</div>
-                                  <div className="text-[9px] text-neutral-500 uppercase">{m.provider}</div>
+                                  <div className="text-[9px] text-neutral-500 uppercase flex gap-1 mt-0.5">
+                                    <span>{m.provider}</span>
+                                    {m.agent_compatible && <span className="text-fra-green font-bold">| AGENTIC READY</span>}
+                                    {!m.agent_compatible && <span className="text-neutral-400">| NO TOOLS</span>}
+                                  </div>
                                 </div>
                                 <div className="flex items-center space-x-1">
                                   <span className={`text-[8px] font-bold px-1 border border-black ${m.status === 'available' ? 'bg-fra-green text-white' : 'bg-neutral-200 text-neutral-600'}`}>
@@ -843,6 +864,9 @@ export default function FraidayWorkspace() {
                                 </div>
                               </div>
                             ))}
+                            {availableModels.length === 0 && !modelsLoading && (
+                              <div className="p-2 text-xs text-red-500 font-bold">No models found. Check GROQ_API_KEY.</div>
+                            )}
                           </div>
                         )}
                       </div>
