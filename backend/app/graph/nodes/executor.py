@@ -466,26 +466,44 @@ async def executor_node(state: dict) -> dict:
             cmd_str = args.get("command")
             if not cmd_str:
                 cmd_str = f'"{python_exe}" "{target}"'
+            elif python_exe and (cmd_str.startswith("python3 ") or cmd_str.startswith("python ") or cmd_str.startswith("py ")):
+                if cmd_str.startswith("python3 "):
+                    script_part = cmd_str[8:].strip()
+                elif cmd_str.startswith("python "):
+                    script_part = cmd_str[7:].strip()
+                else:
+                    script_part = cmd_str[3:].strip()
+                if script_part.startswith("-c ") or script_part.startswith("-m "):
+                    cmd_str = f'"{python_exe}" {script_part}'
+                else:
+                    if not (script_part.startswith('"') and script_part.endswith('"')):
+                        script_part = f'"{script_part}"'
+                    cmd_str = f'"{python_exe}" {script_part}'
 
             # --- PRE-EXECUTION ARTIFACT SYNTAX VALIDATION ---
-            if target.endswith(".py"):
-                syn_val = validate_python_source(target)
-                if not syn_val["valid"]:
-                    await emit(run_id, "agent_thinking", "executor", {"summary": f"Python syntax validation failed for {target}: {syn_val.get('message')}"})
-                    obs = {
-                        "tool": "run_command",
-                        "filename": target,
-                        "command": cmd_str,
-                        "stdout": "",
-                        "stderr": syn_val.get("stderr") or syn_val.get("message"),
-                        "exit_code": 1,
-                        "kind": "syntax_error"
-                    }
-                    state.setdefault("observations", []).append(obs)
-                    await emit(run_id, "observation_created", "executor", obs)
-                    step["status"] = "failed"
-                    await emit(run_id, "step_failed", "executor", {"step_id": step_id, "status": "failed"})
-                    break
+            if target.endswith(".py") and "-c " not in cmd_str:
+                try:
+                    full_target = ws.resolve_path(target)
+                    if os.path.exists(full_target):
+                        syn_val = validate_python_source(target)
+                        if not syn_val["valid"]:
+                            await emit(run_id, "agent_thinking", "executor", {"summary": f"Python syntax validation failed for {target}: {syn_val.get('message')}"})
+                            obs = {
+                                "tool": "run_command",
+                                "filename": target,
+                                "command": cmd_str,
+                                "stdout": "",
+                                "stderr": syn_val.get("stderr") or syn_val.get("message"),
+                                "exit_code": 1,
+                                "kind": "syntax_error"
+                            }
+                            state.setdefault("observations", []).append(obs)
+                            await emit(run_id, "observation_created", "executor", obs)
+                            step["status"] = "failed"
+                            await emit(run_id, "step_failed", "executor", {"step_id": step_id, "status": "failed"})
+                            break
+                except Exception:
+                    pass
 
             await emit(run_id, "command_started", "executor", {"command": cmd_str})
             res = await asyncio.to_thread(execute_action, {"tool": "run_command", "arguments": {"command": cmd_str, "timeout": 20}})
