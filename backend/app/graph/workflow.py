@@ -1,8 +1,11 @@
 import os
+import re
+import time
 import asyncio
 from typing import List, Dict, Any, Optional, Callable
 
 from app.events import emit
+from app.llm.router import call_llm
 from app.workspace.manager import get_workspace_manager
 from app.graph.controller import (
     evaluate_next_decision,
@@ -31,6 +34,38 @@ nodes = {
     "recovery": recovery_node
 }
 
+def is_code_execution_objective(objective: str) -> bool:
+    obj_lower = objective.strip().lower()
+    cleaned = re.sub(r'[^\w\s\.\-]', '', obj_lower).strip()
+
+    # Casual greetings
+    greetings = {"hi", "hello", "hey", "hola", "sup", "greetings", "good morning", "good evening", "good afternoon", "howdy"}
+    if cleaned in greetings:
+        return False
+
+    # Conversational questions that are not requesting code execution or file manipulation
+    conversational_patterns = [
+        r'^(who|what) are you\??$',
+        r'^how are you\??$',
+        r'^what can you do\??$',
+        r'^help\??$',
+        r'^tell me (about|a joke)',
+        r'^explain\b',
+        r'^what is\b'
+    ]
+    if any(re.search(p, obj_lower) for p in conversational_patterns):
+        if not any(w in obj_lower for w in ["create", "write", "code", "file", "script", "build", "run", "make", "generate"]):
+            return False
+
+    # Explicit action cues for code / agentic workflow:
+    action_cues = [
+        "create", "write", "build", "make", "generate", "code", "run", "execute", 
+        "script", "test", "delete", "remove", "update", "modify", "refactor",
+        "open", "browser", "html", "css", "python", ".py", ".html", 
+        ".js", ".json", ".csv", ".txt", ".md", "list files", "dir", "inspect", "show files"
+    ]
+    return any(cue in obj_lower for cue in action_cues)
+
 def sanitize_error_message(msg: str) -> str:
     groq_key = os.environ.get("GROQ_API_KEY", "")
     if groq_key and groq_key in msg:
@@ -45,7 +80,9 @@ async def execute_run_task(
     objective: str,
     runs_db: dict,
     recent_context: Optional[List[Dict[str, Any]]] = None,
-    on_complete: Optional[Callable[[Dict[str, Any]], None]] = None
+    on_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
+    model: Optional[str] = "qwen/qwen3.8-27b",
+    provider: Optional[str] = "groq"
 ):
     ws = get_workspace_manager()
     ws_info = {
@@ -57,9 +94,12 @@ async def execute_run_task(
     state = {
         "run_id": run_id,
         "objective": objective,
+        "model": model or "qwen/qwen3.8-27b",
+        "provider": provider or "groq",
         "workspace": ws_info,
         "conversation_context": recent_context or [],
         "plan": [],
+        "thoughts": [],
         "current_step": "orchestrator",
         "research": [],
         "tool_calls": [],
@@ -86,7 +126,64 @@ async def execute_run_task(
         "conversation_turns": len(state["conversation_context"]),
         "objective": objective
     })
-    
+
+    # --- DYNAMIC INTENT ROUTING: CONVERSATIONAL VS FULL AGENTIC DAG ---
+    if not is_code_execution_objective(objective):
+        runs_db[run_id]["type"] = "chat"
+        state["mode"] = "chat"
+
+        system_prompt = (
+            "You are frAIday, an advanced autonomous AI software engineering assistant. "
+            "The user provided a greeting, conversational question, or general text input. "
+            "Respond naturally, directly, and courteously as an AI assistant. "
+            "Do NOT output JSON plans, tool steps, or markdown fences. Just talk directly with the user."
+        )
+
+        try:
+            chat_reply, chat_thought = await asyncio.to_thread(
+                call_llm,
+                system_prompt,
+                objective,
+                model=model,
+                provider=provider
+            )
+        except Exception:
+            chat_reply = "Hello! I am frAIday, your autonomous software engineering assistant. I can inspect your workspace, write code (Python, HTML, CSS, JavaScript), execute scripts, and launch live browser previews. What would you like to build today?"
+            chat_thought = "User provided a conversational greeting. Providing clear, direct introduction without triggering the tool execution DAG."
+
+        if chat_thought:
+            thought_payload = {
+                "node": "chat",
+                "phase": "Conversational Intent",
+                "title": "Natural Language Response",
+                "thought": chat_thought,
+                "model": model,
+                "provider": provider,
+                "timestamp": time.time()
+            }
+            state.setdefault("thoughts", []).append(thought_payload)
+            await emit(run_id, "thought_generated", "chat", thought_payload)
+
+        await emit(run_id, "chat_response", "assistant", {
+            "text": chat_reply,
+            "objective": objective
+        })
+
+        state["final_response"] = chat_reply
+        state["status"] = "completed"
+        runs_db[run_id]["status"] = "completed"
+        runs_db[run_id]["state"] = state
+
+        if on_complete:
+            on_complete({"role": "user", "text": objective, "reply": chat_reply})
+
+        await emit(run_id, "run_completed", "assistant", {
+            "status": "completed",
+            "type": "chat",
+            "reply": chat_reply
+        })
+        return
+
     try:
         while state["current_step"] != "end":
             state["autonomous_iteration_count"] += 1

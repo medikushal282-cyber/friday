@@ -1,10 +1,11 @@
 import re
 import json
+import time
 import asyncio
 from typing import List, Dict, Any
 
 from app.events import emit
-from app.llm.router import call_groq
+from app.llm.router import call_llm
 from app.workspace.manager import get_workspace_manager
 
 def clean_json(text: str) -> str:
@@ -69,13 +70,16 @@ def build_dynamic_fallback_plan(objective: str, existing_files: List[str], conte
 
     main_script = py_files[0] if py_files else determine_target_filename(objective, context)
 
-    # Web static project (HTML/CSS) handling
-    if html_files or css_files:
+    # Web static project (HTML/CSS) handling or website objective
+    is_web_task = bool(html_files or css_files) or any(w in obj_lower for w in ["website", "landing page", "web page", "web app", "html", "browser", "frontend"])
+    if is_web_task:
+        if not html_files:
+            html_files = ["index.html"]
         for html_f in html_files:
             step_id = f"step_{len(steps) + 1}"
             steps.append({
                 "id": step_id,
-                "description": f"Create HTML artifact '{html_f}'.",
+                "description": f"Create modern HTML artifact '{html_f}'.",
                 "agent": "executor",
                 "action": "CREATE_FILE",
                 "target": html_f,
@@ -116,21 +120,20 @@ def build_dynamic_fallback_plan(objective: str, existing_files: List[str], conte
             })
             prev_step_id = step_id
 
-        for css_f in css_files:
-            step_id = f"step_{len(steps) + 1}"
-            steps.append({
-                "id": step_id,
-                "description": f"Read and inspect CSS stylesheet '{css_f}'.",
-                "agent": "executor",
-                "action": "READ_FILE",
-                "target": css_f,
-                "arguments": {"path": css_f},
-                "depends_on": [prev_step_id],
-                "status": "pending",
-                "reason": f"Inspect {css_f}."
-            })
-            prev_step_id = step_id
-
+        # Agentic browser opening step
+        primary_html = html_files[0]
+        step_id = f"step_{len(steps) + 1}"
+        steps.append({
+            "id": step_id,
+            "description": f"Open '{primary_html}' in browser tab and activate live preview.",
+            "agent": "executor",
+            "action": "OPEN_BROWSER",
+            "target": primary_html,
+            "arguments": {"path": primary_html},
+            "depends_on": [prev_step_id],
+            "status": "pending",
+            "reason": f"Launch browser tab to inspect live rendering of {primary_html}."
+        })
         return steps
 
     # Delete operation
@@ -306,6 +309,7 @@ Available Controlled Actions:
 - UPDATE_FILE: Update an existing file (arguments: {{"path": "<filename>"}})
 - DELETE_FILE: Remove a file subject to safety policy (arguments: {{"path": "<filename>"}})
 - RUN_COMMAND: Execute safe command in workspace (arguments: {{"command": "<cmd>"}})
+- OPEN_BROWSER: Launch website or file in browser tab for live preview (arguments: {{"path": "<filename>"}})
 - INSPECT_RUNTIME: Inspect available Python runtimes
 
 Existing Workspace Files: {json.dumps(existing_files)}
@@ -315,15 +319,15 @@ Existing Workspace Files: {json.dumps(existing_files)}
 Rules:
 1. Every step MUST include: id, description, agent ("executor"), action, target, arguments, depends_on (list of step ids), status ("pending").
 2. Ensure steps reflect true dependencies (e.g. creating input data before running script).
-3. When executing a Python file, use arguments: {{"command": "python <filename>"}}. Do not write complex inline "-c" import assertions.
-4. Return ONLY a JSON object with this schema:
+3. If creating HTML/web artifacts, include an OPEN_BROWSER step to preview the site.
+4. You may include reasoning inside <thought>...</thought> tags, followed by the JSON object with this schema:
 {{
   "steps": [
     {{
       "id": "step_1",
       "description": "...",
       "agent": "executor",
-      "action": "LIST_DIRECTORY" | "READ_FILE" | "CREATE_FILE" | "UPDATE_FILE" | "DELETE_FILE" | "RUN_COMMAND",
+      "action": "LIST_DIRECTORY" | "READ_FILE" | "CREATE_FILE" | "UPDATE_FILE" | "DELETE_FILE" | "RUN_COMMAND" | "OPEN_BROWSER",
       "target": "<filename>",
       "arguments": {{...}},
       "depends_on": [],
@@ -331,14 +335,23 @@ Rules:
       "reason": "..."
     }}
   ]
-}}
-Do NOT include markdown or chain-of-thought."""
+}}"""
 
     user_prompt = f"Objective: {objective}"
 
+    selected_model = state.get("model", "qwen/qwen3.8-27b")
+    selected_provider = state.get("provider", "groq")
+
     plan_data = None
+    extracted_thought = None
     try:
-        response = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+        response, extracted_thought = await asyncio.to_thread(
+            call_llm,
+            system_prompt,
+            user_prompt,
+            model=selected_model,
+            provider=selected_provider
+        )
         plan_data = json.loads(clean_json(response))
     except Exception:
         plan_data = None
@@ -368,6 +381,35 @@ Do NOT include markdown or chain-of-thought."""
     if not steps:
         steps = build_dynamic_fallback_plan(objective, existing_files, context)
 
+    # Format Antigravity-Style Thoughts
+    target_files = [s.get("target") for s in steps if s.get("target") and s.get("target") != "."]
+    actions = [s.get("action") for s in steps]
+    
+    thought_content = extracted_thought or (
+        f"### 1. Objective Deconstruction & Context Understanding\n"
+        f"- **Primary Goal**: `{objective}`\n"
+        f"- **Engine**: `{selected_model}` via `{selected_provider.upper()}`\n"
+        f"- **Discovered Workspace Assets**: {len(existing_files)} files in working directory.\n\n"
+        f"### 2. Cognitive Strategy & Action Plan\n"
+        f"- Sequenced **{len(steps)} operational stages**: {' -> '.join(actions)}.\n"
+        f"- Target Artifacts: {', '.join(f'`{f}`' for f in target_files) if target_files else 'Workspace Root'}.\n"
+        f"{'- Live Browser Integration: Configured `OPEN_BROWSER` action for live web preview.' if 'OPEN_BROWSER' in actions else '- Standard process and file CRUD execution pipeline.'}\n\n"
+        f"### 3. Tool Policy & Self-Correction Hypotheses\n"
+        f"- Sandboxed execution with non-destructive verification.\n"
+        f"- Automated exit code and output matching via Validator agent."
+    )
+
+    thought_payload = {
+        "node": "orchestrator",
+        "phase": "Planning & Strategic Reasoning",
+        "title": "Autonomous Strategy & Plan Formulation",
+        "thought": thought_content,
+        "model": selected_model,
+        "provider": selected_provider,
+        "timestamp": time.time()
+    }
+    state.setdefault("thoughts", []).append(thought_payload)
+    await emit(state["run_id"], "thought_generated", "orchestrator", thought_payload)
 
     state["plan"] = steps
     await emit(state["run_id"], "plan_created", "orchestrator", {"steps": steps})

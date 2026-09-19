@@ -7,12 +7,11 @@ from app.workspace.artifact_cleaner import extract_and_validate_artifact
 
 def extract_expected_outputs(objective: str) -> list:
     """
-    Extracts explicit required output strings enclosed in single/double quotes.
-    E.g. "Create context_test.py that prints 'Hello from Fraiday'." -> ['Hello from Fraiday']
-    "Modify it to print 'Hello from Fraiday Context'." -> ['Hello from Fraiday Context']
+    Only extract expected stdout if explicitly requested to print/output/log/echo.
+    E.g. print 'Hello', prints "Done", echoing 'foo'
     """
-    matches = re.findall(r"['\"]([^'\"]+)['\"]", objective)
-    filtered = [m for m in matches if not m.endswith(".py") and not m.endswith(".json") and not m.endswith(".csv") and not m.endswith(".html") and not m.endswith(".css")]
+    matches = re.findall(r"(?:print|output|say|display|log|echo)\w*\s+(?:to\s+)?['\"]([^'\"]+)['\"]", objective, re.IGNORECASE)
+    filtered = [m for m in matches if not any(m.endswith(ext) for ext in [".py", ".js", ".ts", ".json", ".csv", ".html", ".css"])]
     return filtered
 
 async def validator_node(state: dict) -> dict:
@@ -89,7 +88,7 @@ async def validator_node(state: dict) -> dict:
                 last_obs = observations[-1]
                 tool_name = (last_obs.get("tool") or last_obs.get("action") or "").lower()
                 is_success = last_obs.get("success", False)
-                if tool_name in ["read_file", "create_file", "write_file", "update_file", "list_directory", "inspect_workspace"]:
+                if tool_name in ["read_file", "create_file", "write_file", "update_file", "list_directory", "inspect_workspace", "open_browser"]:
                     if is_success:
                         result = {"valid": True, "reason": f"Workspace operation '{tool_name}' verified successfully."}
                     else:

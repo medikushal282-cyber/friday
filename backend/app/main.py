@@ -8,13 +8,14 @@ load_dotenv()
 
 from app.api.runs import router as runs_router
 from app.api.workspace import router as workspace_router
-from app.llm.router import call_groq
+from app.api.preview import router as preview_router
+from app.llm.router import call_groq, get_models_catalog
 
 app = FastAPI(title="Fraiday Orchestration API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,6 +23,11 @@ app.add_middleware(
 
 app.include_router(runs_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
+app.include_router(preview_router, prefix="/api")
+
+@app.get("/api/models")
+def list_models():
+    return {"models": get_models_catalog()}
 
 @app.get("/health")
 def health_check():

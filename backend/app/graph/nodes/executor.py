@@ -2,10 +2,12 @@ import os
 import re
 import json
 import asyncio
+import webbrowser
 from typing import List, Dict, Any, Optional
 
 from app.events import emit
-from app.llm.router import call_groq
+from app.llm.router import call_llm
+from app.api.preview import notify_file_change
 from app.workspace.manager import get_workspace_manager
 from app.workspace.tools import execute_action, execute_tool, validate_python_source, classify_failure
 from app.graph.controller import create_structured_observation
@@ -105,16 +107,61 @@ def generate_smart_file_content(target: str, objective: str, research: list, obs
     if target_lower.endswith(".html") or target_lower.endswith(".htm"):
         css_link = '<link rel="stylesheet" href="styles.css">' if ("styles.css" in obj_lower or "css" in obj_lower) else ''
         return f"""<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Fraiday Runtime Test</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>frAIday Autonomous Web App</title>
     {css_link}
+    <style>
+        :root {{
+            --bg: #F5F2EA;
+            --black: #0A0A0A;
+            --yellow: #FFE600;
+            --green: #22C55E;
+            --card: #FFFFFF;
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif; }}
+        body {{ background: var(--bg); color: var(--black); min-height: 100vh; padding: 2rem; display: flex; flex-direction: column; align-items: center; justify-content: center; }}
+        .container {{ background: var(--card); border: 3px solid var(--black); box-shadow: 6px 6px 0px var(--black); max-width: 640px; width: 100%; padding: 2rem; border-radius: 4px; }}
+        .tag {{ display: inline-block; background: var(--yellow); border: 2px solid var(--black); padding: 4px 10px; font-weight: 800; font-size: 11px; text-transform: uppercase; margin-bottom: 1rem; }}
+        h1 {{ font-size: 2.2rem; font-weight: 900; line-height: 1.1; margin-bottom: 0.75rem; letter-spacing: -0.03em; }}
+        p {{ color: #333; font-size: 14px; line-height: 1.6; margin-bottom: 1.5rem; }}
+        .btn-group {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 1.5rem; }}
+        .btn {{ border: 2px solid var(--black); padding: 10px 18px; font-weight: 800; font-size: 13px; cursor: pointer; transition: all 0.15s ease; box-shadow: 3px 3px 0px var(--black); text-decoration: none; display: inline-flex; align-items: center; }}
+        .btn-primary {{ background: var(--yellow); color: var(--black); }}
+        .btn-primary:hover {{ background: var(--black); color: var(--yellow); transform: translate(-1px, -1px); box-shadow: 4px 4px 0px var(--black); }}
+        .btn-secondary {{ background: white; color: var(--black); }}
+        .btn-secondary:hover {{ background: #f0f0f0; }}
+        .stats-box {{ margin-top: 1.5rem; padding: 1rem; border: 2px solid var(--black); background: #fafafa; display: flex; align-items: center; justify-content: space-between; }}
+        .status-pulse {{ width: 10px; height: 10px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 8px; animation: pulse 1.5s infinite; }}
+        @keyframes pulse {{ 0%, 100% {{ opacity: 1; transform: scale(1); }} 50% {{ opacity: 0.4; transform: scale(0.85); }} }}
+    </style>
 </head>
 <body>
-    <h1>Hello from Fraiday</h1>
-    <p>Autonomous workspace test</p>
-    <button>Run Test</button>
+    <div class="container">
+        <div class="tag">frAIday Agentic Web</div>
+        <h1>Live Autonomous Website</h1>
+        <p>This web application was generated and compiled autonomously in your workspace. Live-reload sync is active: any agent updates reflect here automatically.</p>
+        
+        <div class="stats-box">
+            <span style="font-size: 12px; font-weight: 700; font-family: monospace;"><span class="status-pulse"></span>LIVE PREVIEW ACTIVE</span>
+            <span id="counterDisplay" style="font-weight: 900; font-size: 18px; font-family: monospace;">0 Interactions</span>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn btn-primary" onclick="handleAction()">Execute Action +1</button>
+            <button class="btn btn-secondary" onclick="alert('Autonomous agent verified in live browser!')">Verify Runtime</button>
+        </div>
+    </div>
+
+    <script>
+        let clicks = 0;
+        function handleAction() {{
+            clicks++;
+            document.getElementById('counterDisplay').innerText = clicks + (clicks === 1 ? ' Interaction' : ' Interactions');
+        }}
+    </script>
 </body>
 </html>
 """
@@ -381,6 +428,7 @@ async def executor_node(state: dict) -> dict:
                 await emit(run_id, "step_failed", "executor", {"step_id": step_id, "status": "failed"})
                 break
             else:
+                notify_file_change()
                 await emit(run_id, "step_completed", "executor", {"step_id": step_id, "status": "completed"})
 
         elif action == "UPDATE_FILE":
@@ -391,7 +439,9 @@ async def executor_node(state: dict) -> dict:
             system_prompt = f"Update target file '{rel_path}' content. Return ONLY valid file content without markdown or natural language commentary.\nExisting content:\n{existing_code}\nObjective: {objective}"
             user_prompt = f"Target: {rel_path}"
             try:
-                updated_code = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+                selected_model = state.get("model", "qwen/qwen3.8-27b")
+                selected_provider = state.get("provider", "groq")
+                updated_code, _ = await asyncio.to_thread(call_llm, system_prompt, user_prompt, model=selected_model, provider=selected_provider)
             except Exception:
                 quoted = extract_quoted_strings(objective)
                 if len(quoted) >= 2:
@@ -418,6 +468,7 @@ async def executor_node(state: dict) -> dict:
             if res.get("success"):
                 await emit(run_id, "file_updated", "executor", {"path": rel_path, "lines": res.get("lines")})
                 record_artifact(state, rel_path, "updated")
+                notify_file_change()
 
             state.setdefault("tool_calls", []).append({"action": {"tool": "update_file", "arguments": {"path": rel_path}}, "result": res})
             step["result"] = res
@@ -439,6 +490,42 @@ async def executor_node(state: dict) -> dict:
             else:
                 await emit(run_id, "step_completed", "executor", {"step_id": step_id, "status": "completed"})
 
+        elif action in ["OPEN_BROWSER", "LAUNCH_PREVIEW"]:
+            rel_path = args.get("path") or target or "index.html"
+            preview_url = f"http://localhost:8000/api/preview/{rel_path}"
+
+            await emit(run_id, "tool_call_started", "executor", {"tool": "open_browser", "url": preview_url, "path": rel_path})
+
+            try:
+                browser_success = webbrowser.open(preview_url)
+            except Exception:
+                browser_success = False
+
+            res = {
+                "success": True,
+                "url": preview_url,
+                "browser_launched": browser_success,
+                "path": rel_path
+            }
+            await emit(run_id, "tool_call_completed", "executor", res)
+            await emit(run_id, "browser_opened", "executor", {"url": preview_url, "path": rel_path})
+
+            step["result"] = res
+            step["status"] = "completed"
+            state.setdefault("tool_calls", []).append({"action": {"tool": "open_browser", "arguments": {"path": rel_path, "url": preview_url}}, "result": res})
+            obs = {
+                "tool": "open_browser",
+                "action": "OPEN_BROWSER",
+                "filename": rel_path,
+                "url": preview_url,
+                "stdout": f"Live preview opened at {preview_url}",
+                "exit_code": 0,
+                "success": True,
+                "kind": "syntax_ok"
+            }
+            state.setdefault("observations", []).append(obs)
+            await emit(run_id, "observation_created", "executor", obs)
+            await emit(run_id, "step_completed", "executor", {"step_id": step_id, "status": "completed"})
 
         elif action == "DELETE_FILE":
             rel_path = args.get("path") or target

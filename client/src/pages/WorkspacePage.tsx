@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../stores/AuthContext';
 import { ShieldCheck, CheckCircle2, Cpu, Settings, LogOut, Terminal, ArrowUpRight, Play } from 'lucide-react';
+import LatticeLoader from '../components/LatticeLoader';
 
 export const WorkspacePage: React.FC = () => {
   const { user, logout } = useAuth();
@@ -194,6 +195,21 @@ export const WorkspacePage: React.FC = () => {
                 <p className="text-[11px] font-mono text-neutral-600 mt-1">
                   Next.js + Python autonomous runtime listening on :3000/:8000.
                 </p>
+                <div className="mt-3 pt-2.5 border-t border-neutral-200">
+                  <LatticeLoader
+                    status="working"
+                    label="Core Active"
+                    pattern="orbit"
+                    grid={3}
+                    shape="round"
+                    cellSize={5}
+                    gap={2}
+                    fontSize={11}
+                    step={90}
+                    idleOpacity={0.2}
+                    showTimer={true}
+                  />
+                </div>
               </div>
             </div>
 

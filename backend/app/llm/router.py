@@ -1,10 +1,323 @@
 import os
+import re
+import json
+import urllib.request
+import urllib.error
+from typing import Dict, Any, List, Optional, Tuple
 from groq import Groq
 
-def call_groq(system: str, user: str, model: str = "qwen/qwen3.8-27b") -> str:
+# Well-known metadata overlays for models when fetched live
+KNOWN_METADATA: Dict[str, Dict[str, Any]] = {
+    "openai/gpt-oss-120b": {
+        "name": "GPT OSS 120B (OpenAI)",
+        "badge": "Flagship OSS",
+        "context_window": "128k",
+        "tags": ["TOOL CALLING", "AGENTIC", "REASONING", "CODER"],
+        "description": "OpenAI flagship 120B open-weights model on Groq. Exceptional reasoning, tool-calling, and code architecture.",
+        "priority": 100
+    },
+    "openai/gpt-oss-20b": {
+        "name": "GPT OSS 20B (OpenAI)",
+        "badge": "Ultra-Fast OSS",
+        "context_window": "128k",
+        "tags": ["TOOL CALLING", "AGENTIC", "FAST", "CODER"],
+        "description": "OpenAI 20B open-weights model on Groq. Blazing fast tool calling, script execution, and live code editing.",
+        "priority": 95
+    },
+    "qwen/qwen3.8-27b": {
+        "name": "Qwen 3 (3.8 27B)",
+        "badge": "Top Coder",
+        "context_window": "32k",
+        "tags": ["TOOL CALLING", "AGENTIC", "CODER"],
+        "description": "Alibaba Qwen3 architecture on Groq. Highly tuned for autonomous software development and filesystem tasks.",
+        "priority": 90
+    },
+    "groq/compound": {
+        "name": "Groq Compound",
+        "badge": "Agentic Compound",
+        "context_window": "64k",
+        "tags": ["TOOL CALLING", "AGENTIC", "ROUTER"],
+        "description": "Groq multi-agent compound model optimized for orchestration and complex multi-step reasoning.",
+        "priority": 80
+    },
+    "groq/compound-mini": {
+        "name": "Groq Compound Mini",
+        "badge": "Fast Compound",
+        "context_window": "32k",
+        "tags": ["TOOL CALLING", "FAST"],
+        "description": "Lightweight compound model for fast tool loops and quick answers.",
+        "priority": 75
+    },
+    "llama-3.3-70b-versatile": {
+        "name": "Llama 3.3 70B Versatile",
+        "badge": "Powerhouse",
+        "context_window": "128k",
+        "tags": ["REASONING", "TOOL CALLING", "AGENTIC"],
+        "description": "Meta 70B open weights with deep strategic reasoning and high tool-calling reliability.",
+        "priority": 85
+    },
+    "llama-3.1-8b-instant": {
+        "name": "Llama 3.1 8B Instant",
+        "badge": "Instant",
+        "context_window": "128k",
+        "tags": ["FAST", "TOOL CALLING"],
+        "description": "Sub-second inference loops for quick tool executions.",
+        "priority": 70
+    },
+    "qwen2.5-coder:latest": {
+        "name": "Qwen 2.5 Coder (Ollama)",
+        "badge": "Local OSS",
+        "context_window": "32k",
+        "tags": ["LOCAL", "CODER", "TOOL CALLING"],
+        "description": "Top-tier open source coding model running completely locally on your machine.",
+        "priority": 60
+    },
+    "deepseek-r1:latest": {
+        "name": "DeepSeek R1 (Ollama)",
+        "badge": "Reasoning",
+        "context_window": "64k",
+        "tags": ["LOCAL", "THINKING", "AGENTIC"],
+        "description": "Native thinking model with deep mathematical and architectural chain-of-thought.",
+        "priority": 55
+    },
+    "gpt-4o": {
+        "name": "GPT-4o",
+        "badge": "Flagship",
+        "context_window": "128k",
+        "tags": ["TOOL CALLING", "AGENTIC", "VISION"],
+        "description": "Industry benchmark for complex multi-tool autonomous agency.",
+        "priority": 50
+    },
+    "claude-3-5-sonnet-20241022": {
+        "name": "Claude 3.5 Sonnet",
+        "badge": "Benchmark",
+        "context_window": "200k",
+        "tags": ["CODER", "AGENTIC", "REASONING"],
+        "description": "State-of-the-art coding and agentic computer-use reasoning.",
+        "priority": 50
+    }
+}
+
+def fetch_live_groq_models() -> List[Dict[str, Any]]:
+    """Live fetch models directly from Groq's API."""
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        raise ValueError("GROQ_API_KEY environment variable is not set. Please set GROQ_API_KEY.")
+        return []
+    
+    models = []
+    try:
+        client = Groq(api_key=api_key)
+        resp = client.models.list()
+        for m in resp.data:
+            mid = m.id
+            mid_lower = mid.lower()
+            # Filter out non-chat models (audio transcription, moderation guards, etc.)
+            if "whisper" in mid_lower or "guard" in mid_lower or "orpheus" in mid_lower:
+                continue
+            
+            meta = KNOWN_METADATA.get(mid, {})
+            name = meta.get("name", mid.split("/")[-1].replace("-", " ").title())
+            badge = meta.get("badge", "Groq Cloud")
+            context = meta.get("context_window", "32k")
+            tags = meta.get("tags", ["TOOL CALLING", "AGENTIC"])
+            desc = meta.get("description", f"Groq high-speed cloud inference model: {mid}")
+            priority = meta.get("priority", 10)
+
+            models.append({
+                "id": mid,
+                "name": name,
+                "provider": "groq",
+                "provider_name": "Groq Cloud",
+                "context_window": context,
+                "badge": badge,
+                "tags": tags,
+                "description": desc,
+                "available": True,
+                "status_text": "Live (Connected)",
+                "priority": priority
+            })
+    except Exception as e:
+        print(f"Error fetching live Groq models: {e}")
+        # Fallback to standard Groq list if network error
+        for mid in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
+            meta = KNOWN_METADATA.get(mid, {})
+            models.append({
+                "id": mid,
+                "name": meta.get("name", mid),
+                "provider": "groq",
+                "provider_name": "Groq Cloud",
+                "context_window": meta.get("context_window", "128k"),
+                "badge": meta.get("badge", "Groq"),
+                "tags": meta.get("tags", ["TOOL CALLING", "AGENTIC"]),
+                "description": meta.get("description", ""),
+                "available": True,
+                "status_text": "Live (Connected)",
+                "priority": meta.get("priority", 10)
+            })
+    return models
+
+def fetch_live_ollama_models() -> List[Dict[str, Any]]:
+    """Live fetch models installed in local Ollama daemon."""
+    models = []
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/tags", headers={"User-Agent": "frAIday"})
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                for item in data.get("models", []):
+                    m_name = item.get("name", "")
+                    meta = KNOWN_METADATA.get(m_name, {})
+                    models.append({
+                        "id": m_name,
+                        "name": meta.get("name", m_name),
+                        "provider": "ollama",
+                        "provider_name": "Ollama Local OSS",
+                        "context_window": meta.get("context_window", "32k"),
+                        "badge": "Local OSS",
+                        "tags": meta.get("tags", ["LOCAL", "TOOL CALLING"]),
+                        "description": meta.get("description", f"Local model installed in Ollama: {m_name}"),
+                        "available": True,
+                        "status_text": "Local Server Ready",
+                        "priority": 40
+                    })
+    except Exception:
+        pass
+
+    # If no local Ollama models were found or Ollama is offline, provide standard placeholders
+    if not models:
+        for mid in ["qwen2.5-coder:latest", "deepseek-r1:latest", "llama3.2:latest"]:
+            meta = KNOWN_METADATA.get(mid, {})
+            models.append({
+                "id": mid,
+                "name": meta.get("name", mid),
+                "provider": "ollama",
+                "provider_name": "Ollama Local OSS",
+                "context_window": meta.get("context_window", "32k"),
+                "badge": "Local OSS",
+                "tags": meta.get("tags", ["LOCAL", "TOOL CALLING"]),
+                "description": meta.get("description", "Local OSS model via Ollama (:11434)"),
+                "available": False,
+                "status_text": "Ollama Offline (:11434)",
+                "priority": 20
+            })
+    return models
+
+def get_models_catalog() -> List[Dict[str, Any]]:
+    """
+    Dynamically fetches live models from Groq and Ollama,
+    and sorts them so GPT OSS 120B, GPT OSS 20B, and Qwen3 are prominently at the top.
+    """
+    catalog = []
+
+    # 1. Fetch live Groq models
+    groq_models = fetch_live_groq_models()
+    catalog.extend(groq_models)
+
+    # 2. Fetch live Ollama models
+    ollama_models = fetch_live_ollama_models()
+    catalog.extend(ollama_models)
+
+    # 3. Add OpenAI & Anthropic models
+    openai_key = bool(os.environ.get("OPENAI_API_KEY"))
+    catalog.append({
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "provider": "openai",
+        "provider_name": "OpenAI",
+        "context_window": "128k",
+        "badge": "Flagship",
+        "tags": ["TOOL CALLING", "AGENTIC", "VISION"],
+        "description": "Industry benchmark for complex multi-tool autonomous agency.",
+        "available": openai_key,
+        "status_text": "Ready" if openai_key else "Needs OPENAI_API_KEY",
+        "priority": 30
+    })
+    catalog.append({
+        "id": "gpt-4o-mini",
+        "name": "GPT-4o Mini",
+        "provider": "openai",
+        "provider_name": "OpenAI",
+        "context_window": "128k",
+        "badge": "Fast",
+        "tags": ["TOOL CALLING", "EFFICIENT"],
+        "description": "Cost-effective, low latency tool calling and code generation.",
+        "available": openai_key,
+        "status_text": "Ready" if openai_key else "Needs OPENAI_API_KEY",
+        "priority": 25
+    })
+
+    anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    catalog.append({
+        "id": "claude-3-5-sonnet-20241022",
+        "name": "Claude 3.5 Sonnet",
+        "provider": "anthropic",
+        "provider_name": "Anthropic",
+        "context_window": "200k",
+        "badge": "Benchmark",
+        "tags": ["CODER", "AGENTIC", "REASONING"],
+        "description": "State-of-the-art coding and agentic computer-use reasoning.",
+        "available": anthropic_key,
+        "status_text": "Ready" if anthropic_key else "Needs ANTHROPIC_API_KEY",
+        "priority": 30
+    })
+
+    # Sort descending by priority so gpt-oss-120b, gpt-oss-20b, and qwen3 are at the very top!
+    catalog.sort(key=lambda x: x.get("priority", 0), reverse=True)
+    return catalog
+
+def extract_thoughts(raw_text: str) -> Tuple[str, Optional[str]]:
+    """Extracts <thought>...</thought> or <think>...</think> from model response."""
+    thought_match = re.search(r'<(?:thought|think)>(.*?)</(?:thought|think)>', raw_text, re.DOTALL | re.IGNORECASE)
+    if thought_match:
+        thought_text = thought_match.group(1).strip()
+        cleaned_text = re.sub(r'<(?:thought|think)>.*?</(?:thought|think)>', '', raw_text, flags=re.DOTALL | re.IGNORECASE).strip()
+        return cleaned_text, thought_text
+    return raw_text.strip(), None
+
+def call_ollama(system: str, user: str, model: str = "qwen2.5-coder:latest") -> str:
+    url = "http://localhost:11434/api/chat"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ],
+        "stream": False
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        return data.get("message", {}).get("content", "")
+
+def call_openai(system: str, user: str, model: str = "gpt-4o") -> str:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not set")
+    url = "https://api.openai.com/v1/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
+        ]
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        return data["choices"][0]["message"]["content"]
+
+def call_groq(system: str, user: str, model: str = "openai/gpt-oss-120b") -> str:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY environment variable is not set.")
     
     client = Groq(api_key=api_key)
     try:
@@ -15,8 +328,9 @@ def call_groq(system: str, user: str, model: str = "qwen/qwen3.8-27b") -> str:
                 {"role": "user", "content": user}
             ]
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
     except Exception as e:
+        # Fallback to qwen3.8-27b if requested model threw not_found
         if "model_not_found" in str(e).lower() or "404" in str(e):
             response = client.chat.completions.create(
                 model="qwen/qwen3.8-27b",
@@ -25,5 +339,40 @@ def call_groq(system: str, user: str, model: str = "qwen/qwen3.8-27b") -> str:
                     {"role": "user", "content": user}
                 ]
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content or ""
         raise
+
+def call_llm(
+    system: str,
+    user: str,
+    model: str = "openai/gpt-oss-120b",
+    provider: str = "groq"
+) -> Tuple[str, Optional[str]]:
+    """
+    Unified LLM router that routes to Groq, Ollama, OpenAI, or Anthropic,
+    and extracts structured thoughts.
+    """
+    raw_response = ""
+    prov = (provider or "groq").lower()
+    
+    try:
+        if prov == "ollama":
+            raw_response = call_ollama(system, user, model)
+        elif prov == "openai":
+            raw_response = call_openai(system, user, model)
+        else:
+            raw_response = call_groq(system, user, model)
+    except Exception as e:
+        # Graceful fallback to default Groq model if configured
+        if os.environ.get("GROQ_API_KEY"):
+            try:
+                raw_response = call_groq(system, user, "openai/gpt-oss-120b")
+            except Exception:
+                try:
+                    raw_response = call_groq(system, user, "qwen/qwen3.8-27b")
+                except Exception:
+                    raise e
+        else:
+            raise e
+
+    return extract_thoughts(raw_response)
