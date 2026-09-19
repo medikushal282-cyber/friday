@@ -637,12 +637,21 @@ export default function FraidayWorkspace() {
                               {/* Generated / Touched Workspace Files */}
                               {artifacts.length > 0 && (
                                 <div className="pt-2 border-t border-neutral-200">
-                                  <span className="text-[10px] uppercase font-bold text-neutral-500 block mb-1">Generated / Modified Files:</span>
+                                  <span className="text-[10px] uppercase font-bold text-neutral-500 block mb-1">Generated / Modified Files (Click to Preview):</span>
                                   <div className="flex flex-wrap gap-1.5">
                                     {artifacts.map((a, idx) => (
-                                      <span key={idx} className="bg-neutral-100 border border-neutral-300 px-2 py-0.5 text-[10px] font-bold text-neutral-800">
-                                        {a.path}
-                                      </span>
+                                      <button
+                                        key={idx}
+                                        onClick={() => {
+                                          setPreviewUrl(`http://localhost:8000/api/preview/${a.path}`);
+                                          setPreviewOpen(true);
+                                        }}
+                                        className="bg-neutral-100 hover:bg-fra-yellow border border-neutral-300 hover:border-black px-2 py-0.5 text-[10px] font-bold text-neutral-800 transition-colors flex items-center space-x-1 shadow-sm"
+                                        title={`Preview ${a.path}`}
+                                      >
+                                        <span>{a.path}</span>
+                                        <span className="text-[8px] text-neutral-500">↗</span>
+                                      </button>
                                     ))}
                                   </div>
                                 </div>
@@ -1039,9 +1048,16 @@ export default function FraidayWorkspace() {
                         <div className="space-y-1 text-[10px]">
                           {artifacts.length > 0 ? (
                             artifacts.map((a, i) => (
-                              <div key={i} className="flex items-center justify-between p-1 border border-neutral-200 bg-neutral-50 hover:bg-fra-yellow/30 cursor-pointer">
+                              <div
+                                key={i}
+                                onClick={() => {
+                                  setPreviewUrl(`http://localhost:8000/api/preview/${a.path}`);
+                                  setPreviewOpen(true);
+                                }}
+                                className="flex items-center justify-between p-1 border border-neutral-200 bg-neutral-50 hover:bg-fra-yellow/40 cursor-pointer transition-colors"
+                              >
                                 <span className="font-bold truncate">{a.path}</span>
-                                <span className="text-[8px] bg-black text-white px-1">FILE</span>
+                                <span className="text-[8px] bg-black text-white px-1">PREVIEW ↗</span>
                               </div>
                             ))
                           ) : (

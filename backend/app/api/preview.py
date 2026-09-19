@@ -78,16 +78,37 @@ async def serve_preview_file(file_path: str):
     wm = get_workspace_manager()
     abs_path = Path(wm.resolve_path(file_path))
     
+    import html as html_lib
+
     # If path is directory or empty, check for index.html
     if abs_path.is_dir():
         index_cand = abs_path / "index.html"
         if index_cand.exists():
             abs_path = index_cand
-        else:
-            raise HTTPException(status_code=404, detail=f"Directory specified without index.html: {file_path}")
             
     if not abs_path.exists() or not abs_path.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+        available = [f.name for f in wm.root.glob("*") if f.is_file()][:10]
+        avail_html = "".join([f'<li><a href="/api/preview/{name}" style="color:#FFE600;">{name}</a></li>' for name in available])
+        not_found_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>File Not Found | Preview</title>
+    <style>
+        body {{ margin: 0; padding: 24px; background: #0A0A0A; color: #E5E5E5; font-family: monospace; font-size: 13px; }}
+        h2 {{ color: #EF4444; margin-top: 0; }}
+        ul {{ list-style-type: square; padding-left: 20px; }}
+        li {{ margin: 6px 0; }}
+    </style>
+</head>
+<body>
+    <h2>File Not Found: {file_path}</h2>
+    <p>Available files in workspace root:</p>
+    <ul>{avail_html}</ul>
+    {LIVE_RELOAD_SCRIPT}
+</body>
+</html>"""
+        return HTMLResponse(content=not_found_html, status_code=200)
         
     mime_type, _ = mimetypes.guess_type(str(abs_path))
     mime_type = mime_type or "application/octet-stream"
@@ -100,5 +121,34 @@ async def serve_preview_file(file_path: str):
         else:
             content += f"\n{LIVE_RELOAD_SCRIPT}"
         return HTMLResponse(content=content)
+
+    # For code/text files, render with dark code theme
+    text_exts = [".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".css", ".txt", ".md", ".sh", ".log", ".yaml", ".yml", ".sql"]
+    if abs_path.suffix.lower() in text_exts or (mime_type and mime_type.startswith("text/")):
+        code_content = abs_path.read_text(encoding="utf-8", errors="replace")
+        escaped_code = html_lib.escape(code_content)
+        lines = code_content.splitlines()
+        code_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{abs_path.name} | Preview</title>
+    <style>
+        body {{ margin: 0; padding: 16px; background: #0F0F0F; color: #E0E0E0; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px; line-height: 1.6; }}
+        .header {{ padding-bottom: 10px; margin-bottom: 12px; border-bottom: 2px solid #262626; display: flex; justify-content: space-between; align-items: center; }}
+        .badge {{ background: #FFE600; color: #000; padding: 2px 8px; font-weight: 800; font-size: 10px; text-transform: uppercase; border: 1px solid #000; }}
+        pre {{ margin: 0; white-space: pre-wrap; word-break: break-all; background: #171717; padding: 12px; border: 1px solid #262626; border-radius: 4px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div><strong>{abs_path.name}</strong> <span style="color:#888; font-size: 11px;">({len(lines)} lines, {len(code_content)} bytes)</span></div>
+        <div class="badge">{abs_path.suffix.upper()[1:] if abs_path.suffix else 'FILE'}</div>
+    </div>
+    <pre><code>{escaped_code}</code></pre>
+    {LIVE_RELOAD_SCRIPT}
+</body>
+</html>"""
+        return HTMLResponse(content=code_html)
 
     return FileResponse(abs_path, media_type=mime_type)

@@ -17,16 +17,35 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
 }) => {
   const [deviceMode, setDeviceMode] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [iframeKey, setIframeKey] = useState<number>(1);
+  const [currentUrl, setCurrentUrl] = useState<string>(url);
+  const [inputUrl, setInputUrl] = useState<string>(url);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
+  React.useEffect(() => {
+    setCurrentUrl(url);
+    setInputUrl(url);
+  }, [url]);
+
   if (!isOpen) return null;
+
+  const handleNavigate = (e: React.FormEvent) => {
+    e.preventDefault();
+    let dest = inputUrl.trim();
+    if (!dest) return;
+    if (!dest.startsWith('http://') && !dest.startsWith('https://')) {
+      dest = `http://localhost:8000/api/preview/${dest}`;
+    }
+    setCurrentUrl(dest);
+    setInputUrl(dest);
+    setIframeKey(prev => prev + 1);
+  };
 
   const handleReload = () => {
     setIframeKey(prev => prev + 1);
   };
 
   const handleOpenNewTab = () => {
-    window.open(url, '_blank', 'noopener,noreferrer');
+    window.open(currentUrl, '_blank', 'noopener,noreferrer');
   };
 
   const getContainerWidth = () => {
@@ -57,14 +76,23 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
         </div>
 
         {/* Center URL Address Bar */}
-        <div className="flex-1 max-w-xl mx-auto flex items-center bg-[#171717] border border-neutral-700 px-2 py-1 rounded text-xs font-mono text-neutral-200">
+        <form onSubmit={handleNavigate} className="flex-1 max-w-xl mx-auto flex items-center bg-[#171717] border border-neutral-700 px-2 py-1 rounded text-xs font-mono text-neutral-200">
           <span className="text-neutral-500 mr-1.5 text-[10px]">🔒</span>
-          <span className="truncate flex-1 text-[11px] text-fra-yellow">{url}</span>
-          <div className="flex items-center space-x-1.5 ml-2">
+          <input
+            type="text"
+            value={inputUrl}
+            onChange={(e) => setInputUrl(e.target.value)}
+            className="flex-1 bg-transparent text-[11px] text-fra-yellow focus:outline-none font-mono"
+            placeholder="Type file name (e.g. index.html, main.py) or URL..."
+          />
+          <button type="submit" className="text-[10px] text-neutral-400 hover:text-white ml-1 px-1 font-bold">
+            GO
+          </button>
+          <div className="flex items-center space-x-1.5 ml-2 border-l border-neutral-800 pl-2">
             <span className="w-2 h-2 rounded-full bg-fra-green animate-pulse" title="Live Auto-Sync Active"></span>
             <span className="text-[9px] text-fra-green font-bold uppercase hidden md:inline">SYNC</span>
           </div>
-        </div>
+        </form>
 
         {/* Right Action Tools */}
         <div className="flex items-center space-x-1.5 text-xs font-mono">
@@ -128,7 +156,7 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
           <iframe
             key={iframeKey}
             ref={iframeRef}
-            src={url}
+            src={currentUrl}
             title="Live Preview"
             className="w-full h-full border-0"
             sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
