@@ -274,104 +274,49 @@ def extract_thoughts(raw_text: str) -> Tuple[str, Optional[str]]:
         return cleaned_text, thought_text
     return raw_text.strip(), None
 
-def call_ollama(system: str, user: str, model: str = "qwen2.5-coder:latest") -> str:
-    url = "http://localhost:11434/api/chat"
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ],
-        "stream": False
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-        return data.get("message", {}).get("content", "")
-
-def call_openai(system: str, user: str, model: str = "gpt-4o") -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY not set")
-    url = "https://api.openai.com/v1/chat/completions"
-    payload = {
-        "model": model,
-        "messages": [
+def call_litellm(system: str, user: str, model: str, provider: str) -> str:
+    import litellm
+    model_str = model
+    if provider and provider != "litellm" and "/" not in model_str:
+        if provider == "ollama":
+            model_str = f"ollama/{model_str}"
+        elif provider == "openai":
+            model_str = f"openai/{model_str}"
+        elif provider == "groq":
+            model_str = f"groq/{model_str}"
+        elif provider == "anthropic":
+            model_str = f"anthropic/{model_str}"
+    
+    response = litellm.completion(
+        model=model_str,
+        messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user}
         ]
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"]
-
-def call_groq(system: str, user: str, model: str = "openai/gpt-oss-120b") -> str:
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        raise ValueError("GROQ_API_KEY environment variable is not set.")
-    
-    client = Groq(api_key=api_key)
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user}
-            ]
-        )
-        return response.choices[0].message.content or ""
-    except Exception as e:
-        # Fallback to qwen3.8-27b if requested model threw not_found
-        if "model_not_found" in str(e).lower() or "404" in str(e):
-            response = client.chat.completions.create(
-                model="qwen/qwen3.8-27b",
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user}
-                ]
-            )
-            return response.choices[0].message.content or ""
-        raise
+    return response.choices[0].message.content or ""
 
 def call_llm(
     system: str,
     user: str,
-    model: str = "openai/gpt-oss-120b",
+    model: str = "groq/llama3-70b-8192",
     provider: str = "groq"
 ) -> Tuple[str, Optional[str]]:
     """
-    Unified LLM router that routes to Groq, Ollama, OpenAI, or Anthropic,
-    and extracts structured thoughts.
+    Unified LLM router using LiteLLM to route to Groq, Ollama, OpenAI, or Anthropic.
     """
     raw_response = ""
     prov = (provider or "groq").lower()
     
     try:
-        if prov == "ollama":
-            raw_response = call_ollama(system, user, model)
-        elif prov == "openai":
-            raw_response = call_openai(system, user, model)
-        else:
-            raw_response = call_groq(system, user, model)
+        raw_response = call_litellm(system, user, model, prov)
     except Exception as e:
         # Graceful fallback to default Groq model if configured
         if os.environ.get("GROQ_API_KEY"):
             try:
-                raw_response = call_groq(system, user, "openai/gpt-oss-120b")
+                raw_response = call_litellm(system, user, "groq/llama3-70b-8192", "groq")
             except Exception:
-                try:
-                    raw_response = call_groq(system, user, "qwen/qwen3.8-27b")
-                except Exception:
-                    raise e
+                raise e
         else:
             raise e
 

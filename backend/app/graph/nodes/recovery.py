@@ -91,8 +91,10 @@ async def recovery_node(state: dict) -> dict:
 
         repaired_code = None
         try:
-            from app.llm.router import call_groq
-            repaired_code = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+            from app.llm.router import call_llm
+            selected_model = state.get("model", "qwen/qwen3.8-27b")
+            selected_provider = state.get("provider", "groq")
+            repaired_code, _ = await asyncio.to_thread(call_llm, system_prompt, user_prompt, model=selected_model, provider=selected_provider)
         except Exception:
             repaired_code = None
 

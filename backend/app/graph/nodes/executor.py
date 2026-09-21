@@ -394,9 +394,13 @@ async def executor_node(state: dict) -> dict:
             system_prompt = f"Return ONLY valid file content for target file '{rel_path}'. Do NOT include markdown fences, conversational commentary, or tool call markup."
             user_prompt = f"Target: {rel_path}\nObjective: {objective}"
             try:
-                code = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+                selected_model = state.get("model", "qwen/qwen3.8-27b")
+                selected_provider = state.get("provider", "groq")
+                code, _ = await asyncio.to_thread(call_llm, system_prompt, user_prompt, model=selected_model, provider=selected_provider)
             except Exception:
                 code = generate_smart_file_content(rel_path, objective, state.get("research", []), state.get("observations", []))
+                if code is None:
+                    code = f"# Fallback content for {rel_path}\n"
 
             await emit(run_id, "tool_call_started", "executor", {"tool": "create_file", "path": rel_path})
             res = await asyncio.to_thread(execute_action, {"tool": "create_file", "arguments": {"path": rel_path, "content": code}})
@@ -428,6 +432,17 @@ async def executor_node(state: dict) -> dict:
                 await emit(run_id, "step_failed", "executor", {"step_id": step_id, "status": "failed"})
                 break
             else:
+                obs = {
+                    "tool": "create_file",
+                    "action": "CREATE_FILE",
+                    "filename": rel_path,
+                    "stdout": f"File '{rel_path}' created successfully.",
+                    "exit_code": 0,
+                    "success": True,
+                    "kind": "syntax_ok"
+                }
+                state.setdefault("observations", []).append(obs)
+                await emit(run_id, "observation_created", "executor", obs)
                 notify_file_change()
                 await emit(run_id, "step_completed", "executor", {"step_id": step_id, "status": "completed"})
 
@@ -488,6 +503,17 @@ async def executor_node(state: dict) -> dict:
                 await emit(run_id, "step_failed", "executor", {"step_id": step_id, "status": "failed"})
                 break
             else:
+                obs = {
+                    "tool": "update_file",
+                    "action": "UPDATE_FILE",
+                    "filename": rel_path,
+                    "stdout": f"File '{rel_path}' updated successfully.",
+                    "exit_code": 0,
+                    "success": True,
+                    "kind": "syntax_ok"
+                }
+                state.setdefault("observations", []).append(obs)
+                await emit(run_id, "observation_created", "executor", obs)
                 await emit(run_id, "step_completed", "executor", {"step_id": step_id, "status": "completed"})
 
         elif action in ["OPEN_BROWSER", "LAUNCH_PREVIEW"]:

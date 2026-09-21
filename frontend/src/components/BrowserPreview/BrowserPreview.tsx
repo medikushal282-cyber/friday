@@ -36,7 +36,15 @@ export const BrowserPreview: React.FC<BrowserPreviewProps> = ({
     let dest = inputUrl.trim();
     if (!dest) return;
     if (!dest.startsWith('http://') && !dest.startsWith('https://')) {
-      dest = `http://localhost:8000/api/preview/${dest}`;
+      let wsId = 'default';
+      try {
+        const urlObj = new URL(currentUrl);
+        const parts = urlObj.pathname.split('/');
+        if (parts.length >= 4 && parts[1] === 'api' && parts[2] === 'preview') {
+          wsId = parts[3];
+        }
+      } catch (e) {}
+      dest = `http://localhost:8000/api/preview/${wsId}/${dest}`;
     }
     setCurrentUrl(dest);
     setInputUrl(dest);

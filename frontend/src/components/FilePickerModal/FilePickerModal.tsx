@@ -13,11 +13,12 @@ interface FilePickerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelect: (files: { path: string; name: string }[]) => void;
+  workspaceId: string;
 }
 
 const DOCUMENT_EXTS = ['.pdf', '.odf', '.md', '.docx', '.doc', '.txt', '.csv', '.xlsx', '.json', '.yaml', '.yml'];
 
-export const FilePickerModal: React.FC<FilePickerModalProps> = ({ isOpen, onClose, onSelect }) => {
+export const FilePickerModal: React.FC<FilePickerModalProps> = ({ isOpen, onClose, onSelect, workspaceId }) => {
   const [currentPath, setCurrentPath] = useState('');
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -29,7 +30,11 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({ isOpen, onClos
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`http://localhost:8000/api/workspace/files?path=${encodeURIComponent(path)}`);
+      const res = await fetch(`http://localhost:8000/api/workspace/files?path=${encodeURIComponent(path)}`, {
+        headers: {
+          'X-Workspace-Id': workspaceId || 'default'
+        }
+      });
       if (!res.ok) throw new Error('Failed to load files');
       const data = await res.json();
       if (data.success && data.entries) {

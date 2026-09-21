@@ -611,6 +611,7 @@ DISPATCH_TABLE = {
     "install_package": tool_install_package,
     "patch_file": tool_patch_file,
     "preview_browser": tool_preview_browser,
+    "open_browser": tool_preview_browser,
 }
 
 def validate_action_schema(action: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:

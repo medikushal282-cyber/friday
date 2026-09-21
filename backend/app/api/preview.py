@@ -18,27 +18,28 @@ def notify_file_change():
     global LAST_UPDATE_TIME
     LAST_UPDATE_TIME = time.time()
 
-LIVE_RELOAD_SCRIPT = """
+def get_live_reload_script(workspace_id: str) -> str:
+    return f"""
 <!-- frAIday Live Sync Agentic Preview Script -->
 <script>
-(() => {
+(() => {{
   let lastSeen = Date.now() / 1000;
-  const poll = async () => {
-    try {
-      const res = await fetch('/api/preview/reload-check?since=' + lastSeen);
-      if (res.ok) {
+  const poll = async () => {{
+    try {{
+      const res = await fetch('/api/preview/{workspace_id}/reload-check?since=' + lastSeen);
+      if (res.ok) {{
         const data = await res.json();
-        if (data.reload) {
+        if (data.reload) {{
           console.log('[frAIday Live Preview] Detected file change, reloading...');
           window.location.reload();
           return;
-        }
-      }
-    } catch (e) {}
+        }}
+      }}
+    }} catch (e) {{}}
     setTimeout(poll, 800);
-  };
+  }};
   setTimeout(poll, 800);
-})();
+}})();
 </script>
 """
 
@@ -46,8 +47,8 @@ class OpenBrowserRequest(BaseModel):
     file_path: str
     browser: Optional[str] = None  # 'default', 'chrome', 'chromium', etc.
 
-@router.get("/reload-check")
-async def reload_check(since: float = Query(...)):
+@router.get("/{workspace_id}/reload-check")
+async def reload_check(workspace_id: str, since: float = Query(...)):
     global LAST_UPDATE_TIME
     should_reload = LAST_UPDATE_TIME > since
     return {"reload": should_reload, "timestamp": LAST_UPDATE_TIME}
@@ -57,15 +58,15 @@ async def trigger_update():
     notify_file_change()
     return {"status": "ok", "timestamp": LAST_UPDATE_TIME}
 
-@router.post("/open")
-async def open_in_browser(req: OpenBrowserRequest):
+@router.post("/{workspace_id}/open")
+async def open_in_browser(workspace_id: str, req: OpenBrowserRequest):
     """Launches the preview URL in the system browser or Chromium."""
-    wm = get_workspace_manager()
+    wm = get_workspace_manager(workspace_id)
     abs_path = Path(wm.resolve_path(req.file_path))
     if not abs_path.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {req.file_path}")
     
-    url = f"http://localhost:8000/api/preview/{req.file_path}"
+    url = f"http://localhost:8000/api/preview/{workspace_id}/{req.file_path}"
     try:
         # Try opening via Python webbrowser module (opens default browser e.g. Chrome/Chromium/Edge)
         opened = webbrowser.open(url)
@@ -73,10 +74,10 @@ async def open_in_browser(req: OpenBrowserRequest):
     except Exception as e:
         return {"status": "error", "message": str(e), "url": url}
 
-@router.get("/{file_path:path}")
-async def serve_preview_file(file_path: str):
+@router.get("/{workspace_id}/{file_path:path}")
+async def serve_preview_file(workspace_id: str, file_path: str):
     try:
-        wm = get_workspace_manager()
+        wm = get_workspace_manager(workspace_id)
         abs_path = Path(wm.resolve_path(file_path))
         
         import html as html_lib
@@ -89,7 +90,7 @@ async def serve_preview_file(file_path: str):
                 
         if not abs_path.exists() or not abs_path.is_file():
             available = [f.name for f in Path(wm.root_path).glob("*") if f.is_file()][:10]
-            avail_html = "".join([f'<li><a href="/api/preview/{name}" style="color:#FFE600;">{name}</a></li>' for name in available])
+            avail_html = "".join([f'<li><a href="/api/preview/{workspace_id}/{name}" style="color:#FFE600;">{name}</a></li>' for name in available])
             not_found_html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -106,7 +107,7 @@ async def serve_preview_file(file_path: str):
     <h2>File Not Found: {file_path}</h2>
     <p>Available files in workspace root:</p>
     <ul>{avail_html}</ul>
-    {LIVE_RELOAD_SCRIPT}
+    {get_live_reload_script(workspace_id)}
 </body>
 </html>"""
             return HTMLResponse(content=not_found_html, status_code=200)
@@ -117,10 +118,11 @@ async def serve_preview_file(file_path: str):
         # For HTML files, inject the live reload script right before </body>
         if mime_type == "text/html" or abs_path.suffix.lower() in [".html", ".htm"]:
             content = abs_path.read_text(encoding="utf-8", errors="replace")
+            script_tag = get_live_reload_script(workspace_id)
             if "</body>" in content:
-                content = content.replace("</body>", f"{LIVE_RELOAD_SCRIPT}\n</body>")
+                content = content.replace("</body>", f"{script_tag}\n</body>")
             else:
-                content += f"\n{LIVE_RELOAD_SCRIPT}"
+                content += f"\n{script_tag}"
             return HTMLResponse(content=content)
 
         # For code/text files, render with dark code theme
@@ -147,7 +149,7 @@ async def serve_preview_file(file_path: str):
         <div class="badge">{abs_path.suffix.upper()[1:] if abs_path.suffix else 'FILE'}</div>
     </div>
     <pre><code>{escaped_code}</code></pre>
-    {LIVE_RELOAD_SCRIPT}
+    {get_live_reload_script(workspace_id)}
 </body>
 </html>"""
             return HTMLResponse(content=code_html)

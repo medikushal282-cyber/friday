@@ -64,7 +64,8 @@ export default function FraidayWorkspace() {
       const parts = rel.split(/[\\/]/);
       rel = parts[parts.length - 1];
     }
-    return `http://localhost:8000/api/preview/${rel}`;
+    const wsIdStr = activeWorkspaceId ? `/${activeWorkspaceId}` : '/default';
+    return `http://localhost:8000/api/preview${wsIdStr}/${rel}`;
   };
 
   const [inputVal, setInputVal] = useState("");
@@ -1694,6 +1695,7 @@ export default function FraidayWorkspace() {
       <FilePickerModal
         isOpen={filePickerOpen}
         onClose={() => setFilePickerOpen(false)}
+        workspaceId={activeWorkspaceId}
         onSelect={handleAttachFiles}
       />
     </>

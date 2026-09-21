@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import time
 from dotenv import load_dotenv
+from app.workspace.manager import active_workspace_id
 
 load_dotenv()
 
@@ -10,9 +11,19 @@ from app.api.runs import router as runs_router
 from app.api.workspace import router as workspace_router
 from app.api.preview import router as preview_router
 from app.api.sandbox import router as sandbox_router
-from app.llm.router import call_groq, get_models_catalog
+from app.llm.router import get_models_catalog
 
 app = FastAPI(title="Fraiday Orchestration API", version="0.1.0")
+
+@app.middleware("http")
+async def workspace_middleware(request: Request, call_next):
+    ws_id = request.headers.get("X-Workspace-Id", "default")
+    token = active_workspace_id.set(ws_id)
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        active_workspace_id.reset(token)
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,7 +57,8 @@ def health_check():
 def groq_health():
     start_time = time.time()
     try:
-        call_groq("Reply only OK", "hi")
+        from app.llm.router import call_litellm
+        call_litellm("Reply only OK", "hi", "groq/llama3-8b-8192", "groq")
         latency_ms = int((time.time() - start_time) * 1000)
         return {
             "provider": "groq",
@@ -55,14 +67,14 @@ def groq_health():
             "model": "qwen/qwen3.8-27b",
             "error_type": None
         }
-    except ValueError as e:
+    except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
         return {
             "provider": "groq",
             "status": "error",
             "latency_ms": latency_ms,
             "model": "qwen/qwen3.8-27b",
-            "error_type": "missing_api_key" if "GROQ_API_KEY" in str(e) else "unknown_error"
+            "error_type": "missing_api_key" if "api_key" in str(e).lower() else "unknown_error"
         }
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)

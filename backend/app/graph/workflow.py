@@ -88,6 +88,9 @@ async def execute_run_task(
     provider: Optional[str] = "groq",
     attachments: Optional[List[Dict[str, Any]]] = None
 ):
+    from app.workspace.manager import get_workspace_manager, active_workspace_id
+    if workspace_id:
+        active_workspace_id.set(workspace_id)
     ws = get_workspace_manager()
     ws_info = {
         "workspace_id": ws.workspace_id,

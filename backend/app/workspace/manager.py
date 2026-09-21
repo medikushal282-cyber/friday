@@ -4,6 +4,9 @@ import subprocess
 import asyncio
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
+import contextvars
+
+active_workspace_id = contextvars.ContextVar('active_workspace_id', default='default')
 
 from app.workspace.runtime import detect_python, detect_all_runtimes
 from app.workspace.policy import check_command_policy, POLICY_DENIED, POLICY_APPROVAL_REQUIRED, POLICY_SAFE
@@ -340,11 +343,18 @@ class WorkspaceManager:
             }
         }
 
-# Singleton workspace manager instance
-_default_workspace: Optional[WorkspaceManager] = None
+# Multi-workspace manager cache
+_workspace_managers: Dict[str, WorkspaceManager] = {}
 
-def get_workspace_manager() -> WorkspaceManager:
-    global _default_workspace
-    if _default_workspace is None:
-        _default_workspace = WorkspaceManager()
-    return _default_workspace
+def get_workspace_manager(workspace_id: str = None) -> WorkspaceManager:
+    global _workspace_managers
+    if workspace_id is None:
+        workspace_id = active_workspace_id.get()
+    if workspace_id not in _workspace_managers:
+        app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        backend_dir = os.path.dirname(app_dir)
+        repo_root = os.path.dirname(backend_dir)
+        sandbox_dir = os.path.join(repo_root, "sandbox", workspace_id)
+        os.makedirs(sandbox_dir, exist_ok=True)
+        _workspace_managers[workspace_id] = WorkspaceManager(root_path=sandbox_dir, workspace_id=workspace_id)
+    return _workspace_managers[workspace_id]

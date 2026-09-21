@@ -3,7 +3,7 @@ import asyncio
 from typing import Dict, Any, Optional
 
 from app.events import emit
-from app.llm.router import call_groq
+from app.llm.router import call_llm
 from app.workspace.knowledge import get_knowledge_store
 
 def clean_json(text: str) -> str:
@@ -104,7 +104,9 @@ Do NOT include markdown or chain-of-thought."""
     user_prompt = f"Objective: {objective}\nQuery: {query}"
 
     try:
-        response = await asyncio.to_thread(call_groq, system_prompt, user_prompt)
+        selected_model = state.get("model", "qwen/qwen3.8-27b")
+        selected_provider = state.get("provider", "groq")
+        response, _ = await asyncio.to_thread(call_llm, system_prompt, user_prompt, model=selected_model, provider=selected_provider)
         finding_data = json.loads(clean_json(response))
     except Exception:
         # Fallback structured research finding for offline/test environments

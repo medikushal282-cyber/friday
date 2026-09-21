@@ -218,7 +218,7 @@ def _summarize_context(messages: List[dict]) -> str:
     if not messages:
         return ""
     try:
-        from app.llm.router import call_groq
+        from app.llm.router import call_llm
 
         # Build a compact transcript
         transcript_lines = []
@@ -238,10 +238,11 @@ def _summarize_context(messages: List[dict]) -> str:
         # Try fast small model on Groq
         for fast_model in ["llama-3.1-8b-instant", "openai/gpt-oss-20b"]:
             try:
-                summary = call_groq(
+                summary, _ = call_llm(
                     system=system_prompt,
                     user=f"Compress this conversation into concise memory:\n\n{transcript}",
-                    model=fast_model
+                    model=fast_model,
+                    provider="groq"
                 )
                 if summary and summary.strip():
                     return summary.strip()[:400]
